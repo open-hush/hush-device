@@ -1,0 +1,92 @@
+[package]
+name = "hush-device"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Hush contributors"]
+description = "Firmware for the Hush RFID-activated audio device (XIAO ESP32-S3)."
+repository = "https://github.com/open-hush/hush-device"
+publish = false
+
+[[bin]]
+name = "hush-device"
+path = "src/main.rs"
+test = false
+bench = false
+
+# -----------------------------------------------------------------------------
+# Dependencies — declared during phase 0 scaffolding. Many are unused until the
+# matching task is implemented; that's intentional. Bump versions before each
+# phase kicks off (the esp-rs ecosystem moves fast).
+# -----------------------------------------------------------------------------
+[dependencies]
+# Core HAL + async runtime
+esp-hal = { version = "0.22", features = ["esp32s3"] }
+esp-hal-embassy = { version = "0.5", features = ["esp32s3"] }
+esp-backtrace = { version = "0.14", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
+esp-println = { version = "0.12", features = ["esp32s3", "log"] }
+embassy-executor = { version = "0.7", features = ["arch-xtensa", "executor-thread", "nightly"] }
+embassy-time = "0.4"
+embassy-sync = "0.6"
+embassy-futures = "0.1"
+
+# Networking (WiFi + BLE + TLS + HTTP)
+esp-wifi = { version = "0.11", features = ["esp32s3", "wifi", "ble", "esp-alloc"] }
+embassy-net = { version = "0.5", features = ["dhcpv4", "dns", "tcp"] }
+reqwless = { version = "0.13", default-features = false, features = ["embedded-tls"] }
+embedded-tls = { version = "0.17", default-features = false }
+
+# JSON
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-json-core = "0.5"
+
+# Crypto for HMAC signing
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false }
+
+# microSD + filesystem
+embedded-sdmmc = { version = "0.8", default-features = false }
+embedded-hal = "1"
+embedded-hal-async = "1"
+
+# RFID
+mfrc522 = { version = "0.7", default-features = false }
+
+# Internal flash storage (NVS replacement)
+sequential-storage = "3"
+esp-storage = { version = "0.4", features = ["esp32s3"] }
+
+# Heapless data structures
+heapless = { version = "0.8", features = ["serde"] }
+log = "0.4"
+
+# Allocation (PSRAM only, see src/main.rs)
+esp-alloc = "0.5"
+
+# MP3 decoding — crate selection is a phase-1 decision. Candidates listed in
+# PLAN.md. Once decided, replace this placeholder entry.
+# minimp3 = "0.5"
+
+[profile.release]
+opt-level = "s"      # smaller binary = faster OTA, less RAM pressure
+codegen-units = 1
+lto = "fat"
+debug = true         # keep debug info for backtraces; stripped by espflash on flash
+overflow-checks = false
+
+[profile.dev]
+opt-level = 3        # ESP32 cannot run unoptimised embassy code at sane speeds
+debug = true
+
+# -----------------------------------------------------------------------------
+# Host-side test target — used for unit-testing pure logic (no HAL) with
+# `cargo test --features mock-hardware`.
+# -----------------------------------------------------------------------------
+[features]
+default = []
+mock-hardware = []
+
+[dev-dependencies]
+# Reserved for host-side tests in phase 1+

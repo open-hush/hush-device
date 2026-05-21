@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Host-side checks: format and clippy on the parts of the code that
+  # compile with the `mock-hardware` feature. The full Xtensa build runs
+  # in a separate job (below) so this one stays fast.
+  host-checks:
+    name: fmt + host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust (host only)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # TODO(phase-1): re-enable once mock-hardware shims compile cleanly.
+      # - name: Host tests
+      #   run: cargo test --features mock-hardware --target x86_64-unknown-linux-gnu
+
+  # Full firmware build for the Xtensa target. Requires the esp toolchain
+  # installed via espup. Allowed to fail until phase 1 wires up
+  # bring-up code.
+  esp-build:
+    name: esp build (xtensa-esp32s3)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache espup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: espup-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install espup + esp toolchain
+        run: |
+          cargo install espup
+          espup install
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: cargo check
+        shell: bash
+        run: |
+          source $HOME/export-esp.sh
+          cargo check --release --target xtensa-esp32s3-none-elf

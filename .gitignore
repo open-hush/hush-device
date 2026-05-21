@@ -1,0 +1,28 @@
+# Rust build output
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Firmware artifacts
+*.elf
+*.bin
+*.uf2
+*.hex
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Local secrets / dev config
+.env
+secrets.toml
+.cargo/credentials.toml
+
+# Local notes
+.notes/
+SCRATCH.md

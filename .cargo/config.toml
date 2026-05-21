@@ -1,0 +1,19 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+# `cargo run` flashes the device and opens a serial monitor.
+runner = "espflash flash --monitor --partition-table partitions.csv"
+
+rustflags = [
+    # Required to use stable APIs with the esp toolchain.
+    "-C", "link-arg=-Tlinkall.x",
+    "-C", "link-arg=-Trom_functions.x",
+]
+
+[unstable]
+build-std = ["alloc", "core"]
+build-std-features = ["panic_immediate_abort"]
+
+[env]
+ESP_LOG = "info"

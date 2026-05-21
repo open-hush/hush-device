@@ -1,0 +1,6 @@
+[toolchain]
+# The Xtensa target (ESP32-S3) requires the `esp` toolchain installed via
+# `espup install`. See README.md for setup.
+channel = "esp"
+components = ["rust-src"]
+targets = ["xtensa-esp32s3-none-elf"]
