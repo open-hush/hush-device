@@ -433,6 +433,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal-bus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513e0b3a8fb7d3013a8ae17a834283f170deaf7d0eeab0a7c1a36ad4dd356d22"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -849,6 +859,7 @@ dependencies = [
  "embassy-time",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "embedded-hal-bus",
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
@@ -857,6 +868,7 @@ dependencies = [
  "esp-println",
  "heapless 0.8.0",
  "log",
+ "mfrc522",
  "serde",
  "serde-json-core",
  "static_cell",
@@ -1005,6 +1017,16 @@ name = "memo-map"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38d1115007560874e373613744c6fba374c17688327a71c1476d1a5954cc857b"
+
+[[package]]
+name = "mfrc522"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59bde3e7db87adda42137fad89f1c6838df1328bdaaaf3f570846d54d750115e"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "heapless 0.7.17",
+]
 
 [[package]]
 name = "minijinja"

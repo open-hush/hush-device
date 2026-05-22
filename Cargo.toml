@@ -65,6 +65,18 @@ embedded-hal-async = "1"
 # timer + driver hand-off into the led task.
 static_cell = "2"
 
+# MFRC522 RFID reader driver — Phase 1.
+# Default features pull embedded-hal 1.0; we leave them on. The crate
+# itself pins `heapless 0.7` internally, which coexists with our
+# `heapless 0.8` because we never pass heapless types across the
+# boundary.
+mfrc522 = "0.7"
+
+# Embedded-hal-bus wraps a raw `SpiBus` plus a CS pin into the
+# per-device `SpiDevice` trait that `mfrc522` consumes. `default-features
+# = false` keeps `std`/`async` machinery out of the no_std build.
+embedded-hal-bus = { version = "0.3", default-features = false }
+
 # ---- Deferred to later phases (uncomment when the task lands) --------------
 #
 # Phase 2 — sync with backend:
