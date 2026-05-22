@@ -16,58 +16,70 @@ test = false
 bench = false
 
 # -----------------------------------------------------------------------------
-# Dependencies — declared during phase 0 scaffolding. Many are unused until the
-# matching task is implemented; that's intentional. Bump versions before each
-# phase kicks off (the esp-rs ecosystem moves fast).
+# Dependencies — bumped to current esp-rs versions at the start of phase 1.
+# The esp-rs ecosystem is mid-migration to esp-hal 1.1 (esp-storage already
+# moved, esp-hal-embassy / esp-wifi haven't yet), so phase 1 rides the
+# self-consistent 1.0 + esp-hal-embassy 0.9 + embassy 0.7 generation. All
+# deps that belong to later phases (WiFi, BLE, TLS, JSON, crypto, NVS, SD,
+# RFID, MP3) are commented out and re-enabled when their task lands; that
+# keeps the dependency graph minimal for `cargo check` and gives the
+# ecosystem time to converge.
 # -----------------------------------------------------------------------------
 [dependencies]
-# Core HAL + async runtime
-esp-hal = { version = "0.22", features = ["esp32s3"] }
-esp-hal-embassy = { version = "0.5", features = ["esp32s3"] }
-esp-backtrace = { version = "0.14", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
-esp-println = { version = "0.12", features = ["esp32s3", "log"] }
-embassy-executor = { version = "0.7", features = ["arch-xtensa", "executor-thread", "nightly"] }
+# Core HAL + async runtime.
+# Pinned to the beta-era pair (esp-hal 1.0.0-beta.1 + esp-hal-embassy 0.8.1):
+# the released 1.0.0 / 1.1.x dropped the private `__esp_hal_embassy` hook that
+# esp-hal-embassy 0.9.x still references on crates.io, so the latest tags do
+# not actually compile together. Bump again once a corrected esp-hal-embassy
+# ships against esp-hal 1.x stable.
+esp-hal = { version = "=1.0.0-beta.1", features = ["esp32s3", "unstable"] }
+esp-hal-embassy = { version = "=0.8.1", features = ["esp32s3"] }
+esp-backtrace = { version = "0.15", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
+esp-println = { version = "0.13", features = ["esp32s3", "log"] }
+embassy-executor = { version = "0.7", features = ["nightly", "task-arena-size-65536"] }
 embassy-time = "0.4"
 embassy-sync = "0.6"
 embassy-futures = "0.1"
 
-# Networking (WiFi + BLE + TLS + HTTP)
-esp-wifi = { version = "0.11", features = ["esp32s3", "wifi", "ble", "esp-alloc"] }
-embassy-net = { version = "0.5", features = ["dhcpv4", "dns", "tcp"] }
-reqwless = { version = "0.13", default-features = false, features = ["embedded-tls"] }
-embedded-tls = { version = "0.17", default-features = false }
+# PSRAM allocator. Activated as soon as main.rs comes up so any later `alloc`
+# need (TLS, JSON parsing into a heapless overflow) is served from PSRAM.
+esp-alloc = "0.6"
 
-# JSON
+# Logging facade.
+log = "0.4"
+
+# Heapless data structures. Pulled in from day 1 because the event types in
+# src/proto/events.rs use heapless::String etc.
+heapless = { version = "0.8", features = ["serde"] }
+
+# Serde — needed by the proto types below.
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde-json-core = "0.5"
 
-# Crypto for HMAC signing
-hmac = { version = "0.12", default-features = false }
-sha2 = { version = "0.10", default-features = false }
-hex = { version = "0.4", default-features = false }
-
-# microSD + filesystem
-embedded-sdmmc = { version = "0.8", default-features = false }
+# embedded-hal traits — needed by the hw/ trait shims even before the SPI /
+# I2S / SD bring-up lands.
 embedded-hal = "1"
 embedded-hal-async = "1"
 
-# RFID
-mfrc522 = { version = "0.7", default-features = false }
-
-# Internal flash storage (NVS replacement)
-sequential-storage = "3"
-esp-storage = { version = "0.4", features = ["esp32s3"] }
-
-# Heapless data structures
-heapless = { version = "0.8", features = ["serde"] }
-log = "0.4"
-
-# Allocation (PSRAM only, see src/main.rs)
-esp-alloc = "0.5"
-
-# MP3 decoding — crate selection is a phase-1 decision. Candidates listed in
-# PLAN.md. Once decided, replace this placeholder entry.
-# minimp3 = "0.5"
+# ---- Deferred to later phases (uncomment when the task lands) --------------
+#
+# Phase 2 — sync with backend:
+#   esp-wifi      = { version = "...", features = ["esp32s3", "wifi", "ble", "esp-alloc"] }
+#   embassy-net   = { version = "...", features = ["dhcpv4", "dns", "tcp"] }
+#   reqwless      = { version = "...", default-features = false, features = ["embedded-tls"] }
+#   embedded-tls  = { version = "...", default-features = false }
+#   hmac          = { version = "0.12", default-features = false }
+#   sha2          = { version = "0.10", default-features = false }
+#   hex           = { version = "0.4",  default-features = false }
+#   sequential-storage = "..."
+#   esp-storage   = { version = "...", features = ["esp32s3"] }
+#
+# Phase 3 — audio cache on SD:
+#   embedded-sdmmc = { version = "...", default-features = false }
+#
+# Phase 1 (last item) — audio playback:
+#   mfrc522 = { version = "...", default-features = false }
+#   minimp3-sys = "0.6"  # decoder choice taken; FFI to the public-domain C lib
 
 [profile.release]
 opt-level = "s"      # smaller binary = faster OTA, less RAM pressure
