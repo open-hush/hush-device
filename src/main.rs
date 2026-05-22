@@ -39,10 +39,12 @@ use esp_hal::{
     dma_buffers,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
     ledc::{LSGlobalClkSource, Ledc, LowSpeed, timer::{self, TimerIFace}},
+    rng::Rng,
     spi::{Mode as SpiMode, master::{Config as SpiConfig, Spi}},
     time::Rate,
     timer::timg::TimerGroup,
 };
+use esp_wifi::EspWifiController;
 use log::info;
 use static_cell::StaticCell;
 
@@ -62,9 +64,10 @@ use crate::{
         mfrc522::RfidDriver,
         pins,
         sdcard::{SD_INIT_SPI_HZ, SdCardDriver},
+        wifi::WifiCredentials,
     },
     proto::led::{Colour, LED_CHAN, LedState},
-    tasks::{audio::audio_task, led::led_task, rfid::rfid_task},
+    tasks::{audio::audio_task, led::led_task, rfid::rfid_task, wifi::wifi_task},
 };
 
 // ESP-IDF App Descriptor. The second-stage bootloader reads this struct
@@ -73,10 +76,12 @@ use crate::{
 // produce a flashable image.
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Heap region carved out of PSRAM. 64 KiB is enough for phase 1 (logging
-/// buffers + room to grow when TLS / JSON tasks land). Bump in phase 2
-/// when the WiFi + TLS stacks demand more.
-const HEAP_SIZE: usize = 64 * 1024;
+/// Heap region carved out of PSRAM. 96 KiB covers Phase 1: logging
+/// buffers + the ~64 KiB working set `esp-wifi` itself allocates for
+/// the STA path (control blocks, scan buffers, supplicant context). The
+/// TLS + JSON workspaces that Phase 2 adds will likely push this to
+/// 128–160 KiB; revisit then rather than now.
+const HEAP_SIZE: usize = 96 * 1024;
 
 // Static cells for peripherals that need to outlive the `main` stack
 // frame because an embassy task references them. The LEDC peripheral
@@ -93,6 +98,13 @@ static LEDC_TIMER_CELL: StaticCell<esp_hal::ledc::timer::Timer<'static, LowSpeed
 // MBR on every cache touch.
 static SDCARD_CELL: StaticCell<SdCardDriver> = StaticCell::new();
 
+// `esp-wifi`'s `init()` returns an `EspWifiController<'d>` whose
+// lifetime drives the `'d` of every `WifiController` / `Interfaces`
+// derived from it. The wifi task holds those derived handles for the
+// program lifetime, so the controller itself must be `'static` — park
+// it in a `StaticCell` and hand out a `&'static` borrow.
+static WIFI_INIT_CELL: StaticCell<EspWifiController<'static>> = StaticCell::new();
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     // 1. HAL bring-up. Crank the CPU to 240 MHz so audio decode + WiFi
@@ -101,8 +113,9 @@ async fn main(spawner: Spawner) {
         esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // 2. PSRAM heap. Anything we allocate before this call would panic;
-    //    place the allocator first.
-    esp_alloc::heap_allocator!(HEAP_SIZE);
+    //    place the allocator first. The `size:` keyword form is from
+    //    esp-alloc 0.8 — older versions took the size positionally.
+    esp_alloc::heap_allocator!(size: HEAP_SIZE);
 
     // 3. Logger via esp-println over UART0 (USB-C CDC). Level controlled
     //    by the `ESP_LOG` env var at build time (default `info`, see
@@ -291,4 +304,50 @@ async fn main(spawner: Spawner) {
         .expect("failed to spawn audio task");
 
     info!("phase 1: I2S audio task spawned (440 Hz tone)");
+
+    // 10. WiFi STA bring-up. `esp_wifi::init` needs an independent
+    //     timer source (TIMG0 already drives the embassy executor, so
+    //     we hand it TIMG1.timer0), an RNG peripheral for PHY
+    //     calibration, and the virtual RADIO_CLK. The returned
+    //     `EspWifiController` owns the preempt-scheduler threads that
+    //     drive the WiFi MAC; we park it in a `StaticCell` so the
+    //     `WifiController` borrow that `wifi::new` hands out is
+    //     `'static` — required because `wifi_task` outlives `main`.
+    //
+    //     A failure here is non-fatal: the LED + RFID + SD + I2S
+    //     paths still work without WiFi (Phase 1 bench check can
+    //     still complete), so we log and continue rather than
+    //     panicking and losing the green LED.
+    let timg1 = TimerGroup::new(peripherals.TIMG1);
+    match esp_wifi::init(
+        timg1.timer0,
+        Rng::new(peripherals.RNG),
+        peripherals.RADIO_CLK,
+    ) {
+        Ok(init) => {
+            let init: &'static EspWifiController<'static> = WIFI_INIT_CELL.init(init);
+            match esp_wifi::wifi::new(init, peripherals.WIFI) {
+                // `_interfaces` (sta + ap WifiDevice handles) is the
+                // hook embassy-net plugs into for the IP stack in
+                // Phase 2. Drop it here and Phase 2 just takes the
+                // device from `wifi::new` instead.
+                Ok((controller, _interfaces)) => {
+                    let creds = WifiCredentials::from_env();
+                    info!(
+                        "phase 1: WiFi STA task spawned, joining \"{}\"",
+                        creds.ssid.as_str()
+                    );
+                    spawner
+                        .spawn(wifi_task(controller, creds))
+                        .expect("failed to spawn wifi task");
+                }
+                Err(err) => {
+                    log::error!("wifi: controller construction failed: {err:?}");
+                }
+            }
+        }
+        Err(err) => {
+            log::error!("wifi: esp-wifi init failed: {err:?}");
+        }
+    }
 }

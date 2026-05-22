@@ -11,3 +11,4 @@ pub mod sync;
 pub mod input;
 pub mod power;
 pub mod led;
+pub mod wifi;
