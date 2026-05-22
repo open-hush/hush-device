@@ -73,9 +73,15 @@ static_cell = "2"
 mfrc522 = "0.7"
 
 # Embedded-hal-bus wraps a raw `SpiBus` plus a CS pin into the
-# per-device `SpiDevice` trait that `mfrc522` consumes. `default-features
-# = false` keeps `std`/`async` machinery out of the no_std build.
+# per-device `SpiDevice` trait that `mfrc522` and `embedded-sdmmc`
+# both consume. `default-features = false` keeps `std`/`async`
+# machinery out of the no_std build.
 embedded-hal-bus = { version = "0.3", default-features = false }
+
+# microSD over SPI (FAT32) — Phase 1.
+# `default-features = false` drops the `defmt-log` feature; the `log`
+# feature routes the driver's trace lines into our `esp-println` sink.
+embedded-sdmmc = { version = "0.9", default-features = false, features = ["log"] }
 
 # ---- Deferred to later phases (uncomment when the task lands) --------------
 #
