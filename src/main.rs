@@ -9,9 +9,12 @@
 //! - HAL bring-up + PSRAM allocator + embassy time driver + logger.
 //! - The LED RGB driver (three LEDC PWM channels on GPIO 35/36/37) and the
 //!   `led` task that consumes [`crate::proto::led::LedState`] updates.
+//! - SPI2 → MFRC522 RFID reader and the polling `rfid` task that publishes
+//!   [`crate::proto::events::Event::CardScanned`] onto
+//!   [`crate::proto::events::EVENT_BUS`].
 //!
-//! The remaining phase-1 tasks (`rfid`, `audio`, `cache`, `sync`, `input`,
-//! `power`) land in subsequent commits.
+//! The remaining phase-1 tasks (`audio`, `cache`, `sync`, `input`, `power`)
+//! land in subsequent commits.
 
 #![no_std]
 #![no_main]
@@ -26,8 +29,9 @@ use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
-    gpio::Pin,
+    gpio::{Level, Output, OutputConfig, Pin},
     ledc::{LSGlobalClkSource, Ledc, LowSpeed, timer::{self, TimerIFace}},
+    spi::{Mode as SpiMode, master::{Config as SpiConfig, Spi}},
     time::Rate,
     timer::timg::TimerGroup,
 };
@@ -44,9 +48,13 @@ mod storage;
 mod tasks;
 
 use crate::{
-    hw::led::{self, LedDriver},
+    hw::{
+        led::{self, LedDriver},
+        mfrc522::RfidDriver,
+        pins,
+    },
     proto::led::{Colour, LED_CHAN, LedState},
-    tasks::led::led_task,
+    tasks::{led::led_task, rfid::rfid_task},
 };
 
 // ESP-IDF App Descriptor. The second-stage bootloader reads this struct
@@ -128,4 +136,54 @@ async fn main(spawner: Spawner) {
         .expect("led channel rejected initial state");
 
     info!("phase 1: LED RGB online (solid green)");
+
+    // 7. SPI2 → MFRC522. Mode 0, 1 MHz first-bring-up clock (well
+    //    under the 10 MHz the chip supports; bump after bench
+    //    validation if poll latency matters). Pin assignments come
+    //    straight from the canonical `hw::pins` constants.
+    let _ = pins::RFID_IRQ; // wired in hardware, not consumed yet — see hw::mfrc522 docstring.
+
+    let rfid_spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default()
+            .with_frequency(Rate::from_mhz(1))
+            .with_mode(SpiMode::_0),
+    )
+    .expect("SPI2 config failed")
+    .with_sck(peripherals.GPIO7)
+    .with_mosi(peripherals.GPIO9)
+    .with_miso(peripherals.GPIO8);
+
+    // CS is driven by embedded-hal-bus's ExclusiveDevice; start it
+    // high (deasserted) so the first transaction sees a clean edge.
+    let rfid_cs = Output::new(
+        peripherals.GPIO44,
+        Level::High,
+        OutputConfig::default(),
+    );
+
+    // RST: active-low. Start high to release reset. The `RfidDriver`
+    // owns this `Output` for the rest of the program so the pin stays
+    // high even after `main` returns into the executor.
+    let rfid_rst = Output::new(
+        peripherals.GPIO43,
+        Level::High,
+        OutputConfig::default(),
+    );
+
+    match RfidDriver::new(rfid_spi, rfid_cs, rfid_rst) {
+        Ok(driver) => {
+            spawner
+                .spawn(rfid_task(driver))
+                .expect("failed to spawn rfid task");
+            info!("phase 1: MFRC522 driver up, rfid task polling");
+        }
+        Err(err) => {
+            // Surface the failure without panicking. Without RFID the
+            // device is useless, but a hard panic would lock the LED
+            // path too; better to leave the green LED on and let the
+            // operator see "rfid init failed" in the serial log.
+            log::error!("rfid: driver init failed: {err:?}");
+        }
+    }
 }
