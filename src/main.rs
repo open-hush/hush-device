@@ -34,6 +34,12 @@ mod proto;
 mod storage;
 mod tasks;
 
+// ESP-IDF App Descriptor. The second-stage bootloader reads this struct
+// (magic, version, project name, build time, secure-boot bits) before
+// handing control to our reset vector — without it `espflash` refuses to
+// produce a flashable image.
+esp_bootloader_esp_idf::esp_app_desc!();
+
 // Heap region carved out of PSRAM. 64 KiB is enough for phase 1 (logging
 // buffers + room to grow when TLS / JSON tasks land). Bump in phase 2 when
 // the WiFi + TLS stacks demand more.

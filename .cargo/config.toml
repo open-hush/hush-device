@@ -6,20 +6,27 @@ target = "xtensa-esp32s3-none-elf"
 runner = "espflash flash --monitor --partition-table partitions.csv"
 
 rustflags = [
-    # esp-hal 1.0+ injects `linkall.x` + `rom-functions.x` via its own
-    # `cargo:rustc-link-arg` directives; we no longer pass them manually.
+    # Linker scripts. esp-hal 1.0.0-beta.1 emits `linkall.x` (the umbrella
+    # script that pulls in rom-functions.x, esp32s3-link.x, the interrupt
+    # vector table and the xtensa-lx-rt symbols), but it does NOT auto-inject
+    # it as a `-T` arg the way esp-hal 1.0 stable does — we must pass it
+    # ourselves. Without this every xtensa-lx-rt symbol (`__exception`,
+    # `__pre_init`, `_bss_end`, …) and every PAC peripheral alias
+    # (`FROM_CPU_INTR0`, …) is undefined at link time.
+    "-C", "link-arg=-Tlinkall.x",
+    # `no_std` + `no_main` does not want the C runtime's `crtbegin.o` /
+    # `crtend.o` (they emit `.init` / `.fini` constructors that the xtensa
+    # assembler can't relocate without `l32r` literals — every link without
+    # this flag dies with three `dangerous relocation: l32r: literal placed
+    # after use` errors). `-nodefaultlibs` (below, set by rustc) removes
+    # libc itself but keeps the crt startup objects; `-nostartfiles` drops
+    # those too.
+    "-C", "link-arg=-nostartfiles",
     # Recent nightly turned `panic_immediate_abort` from a build-std feature
     # into a real panic strategy; opt into it here so the `-Z build-std`
     # rebuild of `core` produces abort semantics (smaller binary, no unwinder).
     "-Z", "unstable-options",
     "-C", "panic=immediate-abort",
-    # `--no-gc-sections` is required for the current esp-hal 1.0.0-beta.1 +
-    # esp32s3 PAC 0.32 pairing: the default `--gc-sections` collapses the
-    # trailing PROVIDE aliases in the generated `device.x` and leaves the
-    # tail of `__INTERRUPTS` undefined. Remove this once a corrected
-    # esp-hal-embassy lands against esp-hal 1.1+ on crates.io. See PLAN.md
-    # ("Phase 1 — blocked on upstream") for context.
-    "-C", "link-arg=-Wl,--no-gc-sections",
 ]
 
 [unstable]
