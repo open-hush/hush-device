@@ -70,14 +70,28 @@ Timeouts dashboard-configurable (`DeviceConfig.lightSleepAfterSec`, `deepSleepAf
 
 Acceptance: tap a card, see UID in the serial log, the LED changes colour, a hardcoded MP3 plays through the speaker.
 
-- [ ] `espup install` + `cargo check --target xtensa-esp32s3-none-elf` clean on a fresh checkout.
+- [x] `espup install` + `cargo check --target xtensa-esp32s3-none-elf` clean on a fresh checkout.
 - [ ] LED RGB bring-up with LEDC PWM (3 channels).
-- [ ] UART logging via `esp-println` at 115200.
+- [ ] UART logging via `esp-println` at 115200. **Code is in `src/main.rs` (heartbeat task) but cannot be flashed yet — see "Blocked on upstream" below.**
 - [ ] WiFi STA basic connect (credentials hardcoded for now).
 - [ ] MFRC522 SPI bring-up, IRQ-driven UID read.
 - [ ] microSD SPI bring-up, FAT32 mount.
 - [ ] I2S out to MAX98357A: play a hardcoded MP3 (or raw PCM) from SD.
-- [ ] Decision: select MP3 decoder crate (see decisions below).
+- [x] Decision: select MP3 decoder crate — **`minimp3-sys`** (FFI to the public-domain C library). Picked over Helix MP3 (more bindings work) and `puremp3`/`rinimp3` (immature, risk for the < 60 % CPU budget). Wired in when the audio task lands.
+
+### Blocked on upstream (status 2026-05)
+
+The phase-1 baseline (HAL + esp-alloc + embassy time driver + a heartbeat task) is written and **`cargo check --target xtensa-esp32s3-none-elf` is green**, but **`cargo build`** fails at link time because the version triple available on crates.io is internally inconsistent:
+
+- `esp-hal-embassy 0.9.1` (latest) references the private feature `esp-hal/__esp_hal_embassy`, which the released `esp-hal 1.0` / `1.1.x` dropped — they do not compile together.
+- The matched generation `esp-hal 1.0.0-beta.1` + `esp-hal-embassy 0.8.1` + `embassy-executor 0.7` does compile, but the `xtensa-esp-elf-gcc 15.2` ld shipped by `espup install` fails to resolve the trailing entries of the interrupt vector table that `esp-hal`'s generated `device.x` PROVIDEs as aliases. `--no-gc-sections` (already set in `.cargo/config.toml`) cuts the failure down to one or two entries; any further fix (strong symbol definition or `--defsym`) shifts the failure earlier rather than removing it. Patching `device.x` ourselves would mean forking the build script.
+
+Rather than maintain a long-running ld workaround, this phase is paused until either:
+
+1. A new `esp-hal-embassy` release fixes the `__esp_hal_embassy` reference for `esp-hal 1.1+` on crates.io, or
+2. The `xtensa-esp-elf` binutils release that addresses the PROVIDE alias resolution lands in `espup`.
+
+Until then, **don't add more phase-1 task code on top of this baseline.** New device work should wait so the rebase against the corrected dependency tree is mechanical. The bump itself is small and is in this branch's `Cargo.toml`.
 
 ## Phase 2 — Sync with backend (~2 weeks)
 
@@ -153,11 +167,6 @@ Acceptance: backend can push a new firmware build to a device; rollback is autom
 
 ## Decisions open
 
-- **MP3 decoder**:
-  - **Candidate A**: bindings to **Helix MP3** (battle-tested at Adafruit, C code, ~13 KB code + ~30 KB RAM).
-  - **Candidate B**: `minimp3` via FFI (small, public domain, single header).
-  - **Candidate C**: `puremp3` (pure Rust, less mature, slower).
-  - **Resolution**: bench A vs B in phase 1; pick the one that decodes 128 kbps mono in real time with < 60 % CPU.
 - **Battery low-voltage cutoff**: cut at 3.4 V or 3.3 V? Sparkfun PCM cuts at 2.5 V (too low). We probably want to refuse to start below 3.4 V to protect the cells. Confirm on bench.
 - **SD card spec**: 8 GB or 16 GB high-endurance as recommended default? Document the part number families known to work.
 - **TLS root certs**: bundle ISRG Root X1 only (Let's Encrypt), or DigiCert + Amazon Root too? Smaller = faster boot. Default ISRG only unless we hit issues.
