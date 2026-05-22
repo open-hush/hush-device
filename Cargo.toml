@@ -9,6 +9,16 @@ description = "Firmware for the Hush RFID-activated audio device (XIAO ESP32-S3)
 repository = "https://github.com/open-hush/hush-device"
 publish = false
 
+[lib]
+# The lib is a minimal re-export surface for the pure-logic modules we
+# want to test on the host (see `src/lib.rs`). It is `no_std` and never
+# linked into the firmware binary — `main.rs` keeps its own `mod` tree
+# unchanged. Without the `[lib]` entry, `cargo test --target
+# x86_64-apple-darwin` has nothing to compile (the bin is `test = false`
+# and is `no_std` + `no_main` anyway).
+name = "hush_device"
+path = "src/lib.rs"
+
 [[bin]]
 name = "hush-device"
 path = "src/main.rs"
@@ -23,8 +33,59 @@ bench = false
 # corrected `esp-hal-embassy` ships against `esp-hal 1.x` stable. All deps
 # that belong to later phases (WiFi, BLE, TLS, JSON, crypto, NVS, SD, RFID,
 # MP3) are commented out and re-enabled when their task lands.
+#
+# Cross-target split: the [dependencies] table below holds only crates that
+# also compile on the host (so `cargo test --target x86_64-apple-darwin
+# --lib` works against the host-testable surface in `src/lib.rs`). Anything
+# tied to the Xtensa target — esp-hal & friends, embassy executor, the
+# embedded HAL drivers — lives under
+# `[target.'cfg(target_arch = "xtensa")'.dependencies]` so it never gets
+# pulled into a host build (the esp-hal build script `panic!`s when it sees
+# a host triple).
 # -----------------------------------------------------------------------------
 [dependencies]
+# Logging facade. Pure, host-compatible.
+log = "0.4"
+
+# Heapless data structures. Pulled in from day 1 because the event types in
+# src/proto/events.rs use heapless::String etc. The hmac module also uses
+# heapless::String for the canonical-request and auth-header outputs.
+heapless = { version = "0.8", features = ["serde"] }
+
+# Serde — needed by the proto types below. `derive` + no_std.
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-json-core = "0.5"
+
+# embedded-hal traits — pure trait crates, no_std and host-compatible.
+embedded-hal = "1"
+embedded-hal-async = "1"
+
+# embedded-hal-bus wraps a raw `SpiBus` plus a CS pin into the per-device
+# `SpiDevice` trait that `mfrc522` and `embedded-sdmmc` both consume.
+# `default-features = false` keeps `std`/`async` machinery out of the
+# no_std build. Pure logic so it compiles on the host too.
+embedded-hal-bus = { version = "0.3", default-features = false }
+
+# Static cells for one-shot 'static initialization. Pure logic, works on
+# host too.
+static_cell = "2"
+
+# HMAC-SHA256 device-request signing — Phase 2. Pure `no_std` building
+# blocks; the canonical-request format and clock-skew rules live in
+# `hush-protocol/docs/auth.md`. `hmac::SimpleHmac<Sha256>` lets us keep
+# the dependency footprint minimal (no `block-buffer`/`crypto-common`
+# defaults pulling in alloc indirectly).
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+# -----------------------------------------------------------------------------
+# Xtensa-only deps — pulled in for the device firmware build only. None of
+# these compile cleanly for the host triple (esp-hal's build.rs panics on
+# any non-Xtensa target), and the lib defined in `src/lib.rs` does not
+# reference them, so gating them by target keeps host tests fast and
+# self-contained.
+# -----------------------------------------------------------------------------
+[target.'cfg(target_arch = "xtensa")'.dependencies]
 # Core HAL + async runtime.
 esp-hal = { version = "=1.0.0-beta.1", features = ["esp32s3", "unstable"] }
 esp-hal-embassy = { version = "=0.8.1", features = ["esp32s3"] }
@@ -47,40 +108,12 @@ embassy-futures = "0.1"
 # (`heap_allocator!(size: …)`), which is reflected in main.rs.
 esp-alloc = "0.8"
 
-# Logging facade.
-log = "0.4"
-
-# Heapless data structures. Pulled in from day 1 because the event types in
-# src/proto/events.rs use heapless::String etc.
-heapless = { version = "0.8", features = ["serde"] }
-
-# Serde — needed by the proto types below.
-serde = { version = "1", default-features = false, features = ["derive"] }
-serde-json-core = "0.5"
-
-# embedded-hal traits — needed by the hw/ trait shims even before the SPI /
-# I2S / SD bring-up lands.
-embedded-hal = "1"
-embedded-hal-async = "1"
-
-# Static cells for one-shot 'static initialization of peripherals shared
-# with embassy tasks. Pulled in transitively by esp-hal-embassy; we
-# declare it explicitly to use it directly in main.rs for the LEDC
-# timer + driver hand-off into the led task.
-static_cell = "2"
-
 # MFRC522 RFID reader driver — Phase 1.
 # Default features pull embedded-hal 1.0; we leave them on. The crate
 # itself pins `heapless 0.7` internally, which coexists with our
 # `heapless 0.8` because we never pass heapless types across the
 # boundary.
 mfrc522 = "0.7"
-
-# Embedded-hal-bus wraps a raw `SpiBus` plus a CS pin into the
-# per-device `SpiDevice` trait that `mfrc522` and `embedded-sdmmc`
-# both consume. `default-features = false` keeps `std`/`async`
-# machinery out of the no_std build.
-embedded-hal-bus = { version = "0.3", default-features = false }
 
 # microSD over SPI (FAT32) — Phase 1.
 # `default-features = false` drops the `defmt-log` feature; the `log`
@@ -112,9 +145,6 @@ esp-wifi = { version = "=0.14.0", features = ["esp32s3", "wifi", "log-04"] }
 #   embassy-net   = { version = "0.6", features = ["dhcpv4", "dns", "tcp"] }
 #   reqwless      = { version = "...", default-features = false, features = ["embedded-tls"] }
 #   embedded-tls  = { version = "...", default-features = false }
-#   hmac          = { version = "0.12", default-features = false }
-#   sha2          = { version = "0.10", default-features = false }
-#   hex           = { version = "0.4",  default-features = false }
 #   sequential-storage = "..."
 #   esp-storage   = { version = "...", features = ["esp32s3"] }
 #
