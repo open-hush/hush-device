@@ -71,27 +71,30 @@ Timeouts dashboard-configurable (`DeviceConfig.lightSleepAfterSec`, `deepSleepAf
 Acceptance: tap a card, see UID in the serial log, the LED changes colour, a hardcoded MP3 plays through the speaker.
 
 - [x] `espup install` + `cargo check --target xtensa-esp32s3-none-elf` clean on a fresh checkout.
+- [x] **Link green end to end**: `cargo build --release --target xtensa-esp32s3-none-elf` produces an ELF, `espflash save-image --chip esp32s3` produces a flashable image (~79 KB, ~1.9 % of the 4 MB app partition).
 - [ ] LED RGB bring-up with LEDC PWM (3 channels).
-- [ ] UART logging via `esp-println` at 115200. **Code is in `src/main.rs` (heartbeat task) but cannot be flashed yet — see "Blocked on upstream" below.**
+- [ ] UART logging via `esp-println` at 115200 — **first hardware confirmation that the heartbeat task actually ticks once the device is on a USB-C cable** (the binary builds and flashes; bench verification still pending).
 - [ ] WiFi STA basic connect (credentials hardcoded for now).
 - [ ] MFRC522 SPI bring-up, IRQ-driven UID read.
 - [ ] microSD SPI bring-up, FAT32 mount.
 - [ ] I2S out to MAX98357A: play a hardcoded MP3 (or raw PCM) from SD.
 - [x] Decision: select MP3 decoder crate — **`minimp3-sys`** (FFI to the public-domain C library). Picked over Helix MP3 (more bindings work) and `puremp3`/`rinimp3` (immature, risk for the < 60 % CPU budget). Wired in when the audio task lands.
 
-### Blocked on upstream (status 2026-05)
+### Resolution of the 2026-05-22 link blocker
 
-The phase-1 baseline (HAL + esp-alloc + embassy time driver + a heartbeat task) is written and **`cargo check --target xtensa-esp32s3-none-elf` is green**, but **`cargo build`** fails at link time because the version triple available on crates.io is internally inconsistent:
+The previous baseline `cargo build` failed at link with two visible symptoms that we wrongly attributed to upstream packaging:
 
-- `esp-hal-embassy 0.9.1` (latest) references the private feature `esp-hal/__esp_hal_embassy`, which the released `esp-hal 1.0` / `1.1.x` dropped — they do not compile together.
-- The matched generation `esp-hal 1.0.0-beta.1` + `esp-hal-embassy 0.8.1` + `embassy-executor 0.7` does compile, but the `xtensa-esp-elf-gcc 15.2` ld shipped by `espup install` fails to resolve the trailing entries of the interrupt vector table that `esp-hal`'s generated `device.x` PROVIDEs as aliases. `--no-gc-sections` (already set in `.cargo/config.toml`) cuts the failure down to one or two entries; any further fix (strong symbol definition or `--defsym`) shifts the failure earlier rather than removing it. Patching `device.x` ourselves would mean forking the build script.
+1. An avalanche of undefined references against `xtensa-lx-rt` (`__exception`, `__pre_init`, `_bss_end`, `_init_start`, …) and PAC peripheral aliases (`FROM_CPU_INTR0`, …).
+2. Three `dangerous relocation: l32r: literal placed after use: .init.literal / .fini.literal` errors out of `crtbegin.o` / `crtend.o`.
 
-Rather than maintain a long-running ld workaround, this phase is paused until either:
+The real root cause was the linker invocation, not the `esp-hal-embassy` / `esp-hal` version pair:
 
-1. A new `esp-hal-embassy` release fixes the `__esp_hal_embassy` reference for `esp-hal 1.1+` on crates.io, or
-2. The `xtensa-esp-elf` binutils release that addresses the PROVIDE alias resolution lands in `espup`.
+- **`esp-hal 1.0.0-beta.1` does not auto-inject `linkall.x`** (the umbrella linker script that pulls in `rom-functions.x`, `esp32s3-link.x`, the interrupt vector table and the `xtensa-lx-rt` symbols). The stable `1.0` line does, and the comment in `.cargo/config.toml` claiming "esp-hal 1.0+ injects linkall.x" was simply wrong for beta. Adding `-C link-arg=-Tlinkall.x` removed the avalanche.
+- **`no_std` + `no_main` doesn't want libc's `crtbegin.o` / `crtend.o`** (they emit `.init` / `.fini` constructors that the xtensa assembler cannot relocate without `l32r` literals — hence the `dangerous relocation` triplet). `-nodefaultlibs` (set automatically by rustc) only removes libc; `-C link-arg=-nostartfiles` removes the crt startup objects too.
+- The earlier `--no-gc-sections` workaround was misdiagnosed and has been removed: with the linker script in scope, default `--gc-sections` works fine; PAC PROVIDE aliases were never the issue.
+- **`espflash save-image` additionally requires `esp_bootloader_esp_idf::esp_app_desc!()`** in `main.rs` — without it the ESP-IDF second-stage bootloader rejects the image. Added the crate (`esp-bootloader-esp-idf = "0.1"`) and the macro call right next to the module declarations.
 
-Until then, **don't add more phase-1 task code on top of this baseline.** New device work should wait so the rebase against the corrected dependency tree is mechanical. The bump itself is small and is in this branch's `Cargo.toml`.
+Net change: two extra link args in `.cargo/config.toml`, one extra dep in `Cargo.toml`, one extra macro invocation in `main.rs`. No version bumps, no patches against crates.io. The next phase-1 tasks (LED, MFRC522, SD, I2S) can land on top of this baseline.
 
 ## Phase 2 — Sync with backend (~2 weeks)
 

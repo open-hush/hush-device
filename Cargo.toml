@@ -16,26 +16,24 @@ test = false
 bench = false
 
 # -----------------------------------------------------------------------------
-# Dependencies — bumped to current esp-rs versions at the start of phase 1.
-# The esp-rs ecosystem is mid-migration to esp-hal 1.1 (esp-storage already
-# moved, esp-hal-embassy / esp-wifi haven't yet), so phase 1 rides the
-# self-consistent 1.0 + esp-hal-embassy 0.9 + embassy 0.7 generation. All
-# deps that belong to later phases (WiFi, BLE, TLS, JSON, crypto, NVS, SD,
-# RFID, MP3) are commented out and re-enabled when their task lands; that
-# keeps the dependency graph minimal for `cargo check` and gives the
-# ecosystem time to converge.
+# Dependencies — phase 1 rides the `esp-hal 1.0.0-beta.1` + `esp-hal-embassy
+# 0.8.1` + `embassy 0.7` generation. The released `esp-hal 1.0` / `1.1.x` line
+# dropped a private hook that `esp-hal-embassy 0.9.x` still references on
+# crates.io, so newer tags don't actually compile together; bump again once a
+# corrected `esp-hal-embassy` ships against `esp-hal 1.x` stable. All deps
+# that belong to later phases (WiFi, BLE, TLS, JSON, crypto, NVS, SD, RFID,
+# MP3) are commented out and re-enabled when their task lands.
 # -----------------------------------------------------------------------------
 [dependencies]
 # Core HAL + async runtime.
-# Pinned to the beta-era pair (esp-hal 1.0.0-beta.1 + esp-hal-embassy 0.8.1):
-# the released 1.0.0 / 1.1.x dropped the private `__esp_hal_embassy` hook that
-# esp-hal-embassy 0.9.x still references on crates.io, so the latest tags do
-# not actually compile together. Bump again once a corrected esp-hal-embassy
-# ships against esp-hal 1.x stable.
 esp-hal = { version = "=1.0.0-beta.1", features = ["esp32s3", "unstable"] }
 esp-hal-embassy = { version = "=0.8.1", features = ["esp32s3"] }
 esp-backtrace = { version = "0.15", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
 esp-println = { version = "0.13", features = ["esp32s3", "log"] }
+# Emits the ESP-IDF App Descriptor expected by the second-stage bootloader.
+# Without the `esp_app_desc!()` invocation in `main.rs`, `espflash save-image`
+# / `espflash flash` refuse the binary as "ESP-IDF App Descriptor missing".
+esp-bootloader-esp-idf = "0.1"
 embassy-executor = { version = "0.7", features = ["nightly", "task-arena-size-65536"] }
 embassy-time = "0.4"
 embassy-sync = "0.6"
