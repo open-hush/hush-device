@@ -12,6 +12,10 @@
 //! - SPI2 → MFRC522 RFID reader and the polling `rfid` task that publishes
 //!   [`crate::proto::events::Event::CardScanned`] onto
 //!   [`crate::proto::events::EVENT_BUS`].
+//! - SPI3 → microSD bring-up (400 kHz init clock, MBR + FAT32 probe of the
+//!   first partition). The [`crate::hw::sdcard::SdCardDriver`] lives in a
+//!   `'static` cell so the phase-3 cache task can pick it up without
+//!   re-claiming SPI3 from the consumed `Peripherals`.
 //!
 //! The remaining phase-1 tasks (`audio`, `cache`, `sync`, `input`, `power`)
 //! land in subsequent commits.
@@ -29,7 +33,7 @@ use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
-    gpio::{Level, Output, OutputConfig, Pin},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
     ledc::{LSGlobalClkSource, Ledc, LowSpeed, timer::{self, TimerIFace}},
     spi::{Mode as SpiMode, master::{Config as SpiConfig, Spi}},
     time::Rate,
@@ -52,6 +56,7 @@ use crate::{
         led::{self, LedDriver},
         mfrc522::RfidDriver,
         pins,
+        sdcard::{SD_INIT_SPI_HZ, SdCardDriver},
     },
     proto::led::{Colour, LED_CHAN, LedState},
     tasks::{led::led_task, rfid::rfid_task},
@@ -76,6 +81,12 @@ const HEAP_SIZE: usize = 64 * 1024;
 static LEDC_CELL: StaticCell<Ledc<'static>> = StaticCell::new();
 static LEDC_TIMER_CELL: StaticCell<esp_hal::ledc::timer::Timer<'static, LowSpeed>> =
     StaticCell::new();
+
+// SD driver lives forever once initialised so the phase-3 cache task
+// can borrow it. `embedded-sdmmc` keeps a partition-table cache inside
+// the `VolumeManager`; keeping the same handle avoids re-probing the
+// MBR on every cache touch.
+static SDCARD_CELL: StaticCell<SdCardDriver> = StaticCell::new();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -184,6 +195,56 @@ async fn main(spawner: Spawner) {
             // path too; better to leave the green LED on and let the
             // operator see "rfid init failed" in the serial log.
             log::error!("rfid: driver init failed: {err:?}");
+        }
+    }
+
+    // 8. SPI3 → microSD. 400 kHz first-bring-up clock (SD spec mandates
+    //    ≤ 400 kHz for the init handshake; phase 3 re-clocks via the
+    //    SdCard::spi(|spi| ...) closure once cache throughput matters).
+    let sd_spi = Spi::new(
+        peripherals.SPI3,
+        SpiConfig::default()
+            .with_frequency(Rate::from_hz(SD_INIT_SPI_HZ))
+            .with_mode(SpiMode::_0),
+    )
+    .expect("SPI3 config failed")
+    .with_sck(peripherals.GPIO12)
+    .with_mosi(peripherals.GPIO11)
+    .with_miso(peripherals.GPIO13);
+
+    let sd_cs = Output::new(
+        peripherals.GPIO10,
+        Level::High,
+        OutputConfig::default(),
+    );
+
+    // Card-detect is active-low when a card is seated. Enable the
+    // internal pull-up so the line floats high (= "no card") when no
+    // breakout is wired, instead of reading random states.
+    let sd_cd = Input::new(
+        peripherals.GPIO1,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+
+    match SdCardDriver::new(sd_spi, sd_cs, sd_cd) {
+        Ok(driver) => {
+            let driver = SDCARD_CELL.init(driver);
+            info!(
+                "sd: card present={}, size {} MiB",
+                driver.card_present(),
+                driver.card_size_bytes() / (1024 * 1024)
+            );
+            match driver.probe_first_volume() {
+                Ok(()) => info!("sd: FAT32 volume 0 mounted"),
+                Err(err) => log::error!("sd: FAT32 mount failed: {err:?}"),
+            }
+        }
+        Err(err) => {
+            // The most common cause here is "no card inserted" —
+            // `SdCard::num_bytes` returns `SdCardError::CardNotFound`
+            // in that case. Log and continue: the LED + RFID paths
+            // still work without an SD.
+            log::error!("sd: driver init failed: {err:?}");
         }
     }
 }
