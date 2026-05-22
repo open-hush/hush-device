@@ -35,6 +35,24 @@ On restricted machines (some CI runners, locked-down corp laptops) you can:
 - Skip the Xtensa target entirely and run **host-side tests only** with the `mock-hardware` feature. You can still iterate on pure-logic modules (HMAC canonicalization, NVS encoding, decoder framing) this way.
 - Use the [`esp-rs/rust-build`](https://github.com/esp-rs/rust-build) prebuilt binaries if your platform is supported.
 
+## Build-time environment
+
+Phase 1 reads the WiFi credentials at build time. The link step fails with a clear message if either variable is unset, on purpose — a firmware image with no credentials wastes bench time.
+
+| Var | Used for | Phase |
+|---|---|---|
+| `HUSH_WIFI_SSID` | Hardcoded STA SSID (≤ 32 bytes) | 1 |
+| `HUSH_WIFI_PSK`  | Hardcoded STA PSK  (WPA2-Personal, ≤ 64 bytes) | 1 |
+
+Set them in the shell that drives `cargo build` / `cargo run`:
+
+```bash
+export HUSH_WIFI_SSID="MyAccessPoint"
+export HUSH_WIFI_PSK="correct horse battery staple"
+```
+
+Phase 5 (BLE Improv WiFi) replaces these env vars with credentials negotiated over BLE and persisted in NVS — the env-var path will then be opt-in for bring-up only.
+
 ## Building
 
 ```bash

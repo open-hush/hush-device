@@ -9,3 +9,4 @@ pub mod i2s;
 pub mod mfrc522;
 pub mod sdcard;
 pub mod led;
+pub mod wifi;

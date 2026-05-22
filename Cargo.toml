@@ -41,7 +41,11 @@ embassy-futures = "0.1"
 
 # PSRAM allocator. Activated as soon as main.rs comes up so any later `alloc`
 # need (TLS, JSON parsing into a heapless overflow) is served from PSRAM.
-esp-alloc = "0.6"
+# Pinned to 0.8 because esp-wifi 0.14 transitively depends on the same
+# version and Cargo can't unify two `#[global_allocator]` macros. The
+# bump also moves the `heap_allocator!` macro to the keyword-arg form
+# (`heap_allocator!(size: …)`), which is reflected in main.rs.
+esp-alloc = "0.8"
 
 # Logging facade.
 log = "0.4"
@@ -83,11 +87,29 @@ embedded-hal-bus = { version = "0.3", default-features = false }
 # feature routes the driver's trace lines into our `esp-println` sink.
 embedded-sdmmc = { version = "0.9", default-features = false, features = ["log"] }
 
+# WiFi STA bring-up — last code item of Phase 1.
+# Pinned `=0.14.0` because that's the tag whose `esp-hal` requirement
+# (`=1.0.0-beta.1`) and `xtensa-lx-rt 0.19` line actually link against
+# our pins. The earlier `0.13.0` declared `^1.0.0-beta.0` for esp-hal
+# but pulled `xtensa-lx-rt 0.18` (→ `xtensa-lx 0.10`), which conflicts
+# with `esp-hal 1.0.0-beta.1`'s `xtensa-lx 0.11` via the `links =
+# "xtensa-lx"` rule. 0.14 closes that gap. 0.15+ wants `esp-hal 1.x`
+# stable, not for this generation.
+# Default features (`builtin-scheduler`, `esp-alloc`) intentionally
+# kept on. `log-04` (renamed from `log` mid-beta) routes esp-wifi's
+# internal traces through our `log` 0.4 sink. The `ble` feature lands
+# with the Phase 5 BLE Improv task, not now.
+esp-wifi = { version = "=0.14.0", features = ["esp32s3", "wifi", "log-04"] }
+
+# Random source for `esp-wifi::init` (PHY calibration uses it). `esp-hal`
+# exposes the trait, but the bound is satisfied by `esp_hal::rng::Rng`
+# which is already part of the HAL — no extra crate needed beyond what's
+# pulled in transitively above.
+
 # ---- Deferred to later phases (uncomment when the task lands) --------------
 #
 # Phase 2 — sync with backend:
-#   esp-wifi      = { version = "...", features = ["esp32s3", "wifi", "ble", "esp-alloc"] }
-#   embassy-net   = { version = "...", features = ["dhcpv4", "dns", "tcp"] }
+#   embassy-net   = { version = "0.6", features = ["dhcpv4", "dns", "tcp"] }
 #   reqwless      = { version = "...", default-features = false, features = ["embedded-tls"] }
 #   embedded-tls  = { version = "...", default-features = false }
 #   hmac          = { version = "0.12", default-features = false }
@@ -96,11 +118,8 @@ embedded-sdmmc = { version = "0.9", default-features = false, features = ["log"]
 #   sequential-storage = "..."
 #   esp-storage   = { version = "...", features = ["esp32s3"] }
 #
-# Phase 3 — audio cache on SD:
-#   embedded-sdmmc = { version = "...", default-features = false }
-#
-# Phase 1 (last item) — audio playback:
-#   mfrc522 = { version = "...", default-features = false }
+# Phase 3 — audio cache on SD: already wired above (Phase 1 closed the
+# bring-up). MP3 decoder:
 #   minimp3-sys = "0.6"  # decoder choice taken; FFI to the public-domain C lib
 
 [profile.release]
