@@ -859,6 +859,7 @@ dependencies = [
  "log",
  "serde",
  "serde-json-core",
+ "static_cell",
 ]
 
 [[package]]

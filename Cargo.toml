@@ -59,6 +59,12 @@ serde-json-core = "0.5"
 embedded-hal = "1"
 embedded-hal-async = "1"
 
+# Static cells for one-shot 'static initialization of peripherals shared
+# with embassy tasks. Pulled in transitively by esp-hal-embassy; we
+# declare it explicitly to use it directly in main.rs for the LEDC
+# timer + driver hand-off into the led task.
+static_cell = "2"
+
 # ---- Deferred to later phases (uncomment when the task lands) --------------
 #
 # Phase 2 — sync with backend:
