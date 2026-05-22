@@ -71,9 +71,9 @@ Timeouts dashboard-configurable (`DeviceConfig.lightSleepAfterSec`, `deepSleepAf
 Acceptance: tap a card, see UID in the serial log, the LED changes colour, a hardcoded MP3 plays through the speaker.
 
 - [x] `espup install` + `cargo check --target xtensa-esp32s3-none-elf` clean on a fresh checkout.
-- [x] **Link green end to end**: `cargo build --release --target xtensa-esp32s3-none-elf` produces an ELF, `espflash save-image --chip esp32s3` produces a flashable image (~79 KB, ~1.9 % of the 4 MB app partition).
-- [ ] LED RGB bring-up with LEDC PWM (3 channels).
-- [ ] UART logging via `esp-println` at 115200 — **first hardware confirmation that the heartbeat task actually ticks once the device is on a USB-C cable** (the binary builds and flashes; bench verification still pending).
+- [x] **Link green end to end**: `cargo build --release --target xtensa-esp32s3-none-elf` produces an ELF, `espflash save-image --chip esp32s3` produces a flashable image (~81 KB, ~2.0 % of the 4 MB app partition with the LED task in).
+- [x] **LED RGB bring-up with LEDC PWM (3 channels)**: `src/hw/led.rs` wraps three LEDC low-speed channels (Timer0, 1 kHz, 8-bit duty, compile-time quadratic gamma LUT) behind the `RgbLed` trait. `src/tasks/led.rs` consumes `LedState { colour, pattern }` from `LED_CHAN` and renders Solid / SlowBlink (1 Hz) / FastBlink (4 Hz) over the canonical palette (Off / Red / Amber / Green / Blue). `main.rs` boots the driver and posts `Colour::Green Solid` once the executor is up. **Bench verification (eye-check the LED actually lights green on the XIAO ESP32-S3) still pending.**
+- [ ] UART logging via `esp-println` at 115200 — boot lines emit (`hush firmware booted — bringing up LED RGB` / `phase 1: LED RGB online (solid green)`); bench verification still pending.
 - [ ] WiFi STA basic connect (credentials hardcoded for now).
 - [ ] MFRC522 SPI bring-up, IRQ-driven UID read.
 - [ ] microSD SPI bring-up, FAT32 mount.
