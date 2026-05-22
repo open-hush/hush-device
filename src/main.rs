@@ -16,9 +16,12 @@
 //!   first partition). The [`crate::hw::sdcard::SdCardDriver`] lives in a
 //!   `'static` cell so the phase-3 cache task can pick it up without
 //!   re-claiming SPI3 from the consumed `Peripherals`.
+//! - I2S0 → MAX98357A and the `audio` task that streams a hardcoded
+//!   440 Hz sine-wave tone through the speaker. Proves the I2S DMA
+//!   path works; the SD-to-MP3-to-I2S pipeline lands in phase 3.
 //!
-//! The remaining phase-1 tasks (`audio`, `cache`, `sync`, `input`, `power`)
-//! land in subsequent commits.
+//! The remaining phase-1 tasks (`cache`, `sync`, `input`, `power`) land
+//! in subsequent commits.
 
 #![no_std]
 #![no_main]
@@ -33,6 +36,7 @@ use embassy_executor::Spawner;
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
+    dma_buffers,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
     ledc::{LSGlobalClkSource, Ledc, LowSpeed, timer::{self, TimerIFace}},
     spi::{Mode as SpiMode, master::{Config as SpiConfig, Spi}},
@@ -53,13 +57,14 @@ mod tasks;
 
 use crate::{
     hw::{
+        i2s::AudioOutput,
         led::{self, LedDriver},
         mfrc522::RfidDriver,
         pins,
         sdcard::{SD_INIT_SPI_HZ, SdCardDriver},
     },
     proto::led::{Colour, LED_CHAN, LedState},
-    tasks::{led::led_task, rfid::rfid_task},
+    tasks::{audio::audio_task, led::led_task, rfid::rfid_task},
 };
 
 // ESP-IDF App Descriptor. The second-stage bootloader reads this struct
@@ -247,4 +252,43 @@ async fn main(spawner: Spawner) {
             log::error!("sd: driver init failed: {err:?}");
         }
     }
+
+    // 9. I2S0 → MAX98357A. Circular DMA, 16 KiB TX buffer (~93 ms of
+    //    audio at 44.1 kHz × 4 bytes/frame) so the refill cadence in
+    //    `audio_task` has comfortable headroom against underrun.
+    //    `dma_buffers!(rx, tx)` allocates static arrays and gives us
+    //    `&'static mut` handles, which is exactly what the I2S
+    //    builder + circular transfer want.
+    //
+    // `clippy::manual_div_ceil` fires inside the macro expansion
+    // (esp-hal's own descriptor-count math) — we can't fix it from
+    // here, so allow it locally.
+    #[allow(clippy::manual_div_ceil)]
+    let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(0, 16 * 1024);
+
+    // SD pin on the MAX98357A is the gain/mode selector, not I2S
+    // data. Drive high → "left channel only" mode (the only one that
+    // makes sense for our mono content; the duplicated L=R samples
+    // in `ToneSource` then play out on L).
+    let amp_enable = Output::new(
+        peripherals.GPIO3,
+        Level::High,
+        OutputConfig::default(),
+    );
+
+    let audio_output = AudioOutput::new(
+        peripherals.I2S0,
+        peripherals.DMA_CH0,
+        peripherals.GPIO5,  // BCLK
+        peripherals.GPIO6,  // LRC / WS
+        peripherals.GPIO4,  // DIN
+        amp_enable,
+        tx_descriptors,
+    );
+
+    spawner
+        .spawn(audio_task(audio_output, tx_buffer))
+        .expect("failed to spawn audio task");
+
+    info!("phase 1: I2S audio task spawned (440 Hz tone)");
 }
