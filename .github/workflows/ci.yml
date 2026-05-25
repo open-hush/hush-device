@@ -7,12 +7,15 @@ on:
     branches: [main]
 
 jobs:
-  # Host-side checks: format and clippy on the parts of the code that
-  # compile with the `mock-hardware` feature. The full Xtensa build runs
-  # in a separate job (below) so this one stays fast.
+  # Host-side checks: format and (eventually) tests on the parts of the code
+  # that compile with the `mock-hardware` feature. RUSTUP_TOOLCHAIN=stable
+  # overrides rust-toolchain.toml (which pins `esp`) so cargo doesn't try
+  # to switch to a toolchain that isn't installed here.
   host-checks:
     name: fmt + host tests
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +31,10 @@ jobs:
       # - name: Host tests
       #   run: cargo test --features mock-hardware --target x86_64-unknown-linux-gnu
 
-  # Full firmware build for the Xtensa target. Requires the esp toolchain
-  # installed via espup. Allowed to fail until phase 1 wires up
-  # bring-up code.
+  # Full firmware build for the Xtensa target. The esp-rs xtensa-toolchain
+  # action installs the Espressif Rust fork and sets the env so the
+  # `esp` channel from rust-toolchain.toml resolves correctly. Allowed to
+  # fail until phase 1 wires up the bring-up code end to end.
   esp-build:
     name: esp build (xtensa-esp32s3)
     runs-on: ubuntu-latest
@@ -38,24 +42,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache espup toolchain
+      - name: Install esp toolchain
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32s3
+          ldproxy: true
+
+      - name: Cache cargo registry + target
         uses: actions/cache@v4
         with:
           path: |
-            ~/.rustup
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: espup-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
-
-      - name: Install espup + esp toolchain
-        run: |
-          cargo install espup
-          espup install
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          key: cargo-esp-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: cargo check
-        shell: bash
-        run: |
-          source $HOME/export-esp.sh
-          cargo check --release --target xtensa-esp32s3-none-elf
+        run: cargo check --release --target xtensa-esp32s3-none-elf
