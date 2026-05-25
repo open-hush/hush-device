@@ -2,6 +2,9 @@
 
 Canonical pin assignments for the Hush hardware. **Source of truth is [`src/hw/pins.rs`](../src/hw/pins.rs)** — this document mirrors it for human consumption.
 
+For the system block diagram and pin-to-pin wiring of the breadboard build,
+see [`HARDWARE.md`](./HARDWARE.md).
+
 ## Board
 
 Seeed Studio XIAO ESP32-S3 (8 MB PSRAM variant). GPIO numbering follows the [Seeed pinout diagram](https://wiki.seeedstudio.com/xiao_pin_multiplexing_esp33s3/).

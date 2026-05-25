@@ -1,0 +1,177 @@
+metadata:
+  title: Hush — breadboard wiring
+  description: |
+    Pin-to-pin wiring for the Hush prototype. Hub board is the Seeed Studio
+    XIAO ESP32-S3. Canonical pin assignments live in src/hw/pins.rs; this
+    file mirrors them for assembly. Regenerate with `make` in this directory.
+
+options:
+  bgcolor: WH
+  mini_bom_mode: true
+
+connectors:
+  XIAO:
+    type: Seeed XIAO ESP32-S3
+    subtype: 14-pin edge + back-side pads
+    pinlabels:
+      - 3V3
+      - GND_TOP_1
+      - 5V
+      - GPIO6
+      - GPIO5
+      - GPIO4
+      - GPIO3
+      - GPIO43
+      - GPIO2
+      - GPIO9
+      - GPIO8
+      - GPIO7
+      - GPIO44
+      - GND_TOP_2
+      - GPIO10
+      - GPIO11
+      - GPIO13
+      - GPIO12
+      - GPIO1
+      - GPIO17
+      - GPIO18
+      - GPIO21
+      - GPIO33
+      - GPIO34
+      - GPIO35
+      - GPIO36
+      - GPIO37
+      - GND_BACK
+    notes: |
+      Edge header carries 3V3, two GND pads, 5V, plus GPIO 1..9 / 43 / 44.
+      GPIO 10..37 are back-side castellated pads — solder from underneath.
+
+  AMP:
+    type: MAX98357A
+    subtype: I2S mono Class-D amplifier
+    pinlabels: [LRC, BCLK, DIN, GAIN, SD, GND, VIN]
+    notes: |
+      VIN = 3V3 (single-rail, battery friendly). GAIN floating = +9 dB.
+      SD must be driven low before DEEP_SLEEP to avoid ~3 mA idle draw.
+
+  RFID:
+    type: MFRC522
+    subtype: 13.56 MHz reader (MIFARE Classic)
+    pinlabels: [VCC, RST, GND, IRQ, MISO, MOSI, SCK, SDA]
+    notes: |
+      3.3 V module only — never wire VCC to 5V.
+      SDA = chip-select (active low).
+
+  SD:
+    type: microSD breakout
+    subtype: SPI mode
+    pinlabels: [CS, MOSI, MISO, SCK, GND, VCC, CD]
+    notes: |
+      VCC = 3V3. CD switches to GND when a card is seated; firmware
+      reads it with an internal pull-up.
+
+  ENC:
+    type: KY-040
+    subtype: rotary encoder + push switch
+    pinlabels: [CLK, DT, SW, VCC, GND]
+    notes: On-module pull-ups on CLK/DT/SW (10 kΩ).
+
+  BTN_RST:
+    type: tactile switch
+    subtype: reset / factory chord
+    pinlabels: [SIG, GND]
+
+  BTN_PAIR:
+    type: tactile switch
+    subtype: pairing / DEEP_SLEEP wake
+    pinlabels: [SIG, GND]
+
+  LED:
+    type: RGB LED (common cathode)
+    subtype: 5 mm, with 3× 220 Ω inline resistors
+    pinlabels: [R, G, B, K]
+    notes: One 220 Ω resistor in series with each colour anode.
+
+cables:
+  W_AUDIO:
+    gauge: 26 AWG
+    color_code: IEC
+    colors: [RD, BK, BU, GN, YE, OG]
+    notes: I2S bus + 3V3 power to MAX98357A.
+
+  W_RFID:
+    gauge: 26 AWG
+    color_code: IEC
+    colors: [RD, BK, OG, YE, GN, BU, VT, WH]
+    notes: SPI2 + RST + IRQ + 3V3 power to MFRC522.
+
+  W_SD:
+    gauge: 26 AWG
+    color_code: IEC
+    colors: [RD, BK, OG, YE, GN, BU, WH]
+    notes: SPI3 + card-detect + 3V3 power to microSD breakout.
+
+  W_ENC:
+    gauge: 28 AWG
+    color_code: IEC
+    colors: [RD, BK, GN, BU, YE]
+    notes: 3V3 + GND + CLK/DT/SW to KY-040.
+
+  W_BTN_RST:
+    gauge: 28 AWG
+    color_code: IEC
+    colors: [WH, BK]
+
+  W_BTN_PAIR:
+    gauge: 28 AWG
+    color_code: IEC
+    colors: [WH, BK]
+
+  W_LED:
+    gauge: 28 AWG
+    color_code: IEC
+    colors: [RD, GN, BU, BK]
+    notes: Each colour wire passes through a 220 Ω resistor before the LED anode.
+
+connections:
+  # --- I2S audio: MAX98357A ---
+  -
+    - XIAO: [3V3, GND_TOP_1, GPIO6, GPIO5, GPIO4, GPIO3]
+    - W_AUDIO: [1, 2, 3, 4, 5, 6]
+    - AMP: [VIN, GND, LRC, BCLK, DIN, SD]
+
+  # --- SPI2 RFID: MFRC522 ---
+  -
+    - XIAO: [3V3, GND_TOP_2, GPIO43, GPIO2, GPIO8, GPIO9, GPIO7, GPIO44]
+    - W_RFID: [1, 2, 3, 4, 5, 6, 7, 8]
+    - RFID: [VCC, GND, RST, IRQ, MISO, MOSI, SCK, SDA]
+
+  # --- SPI3 microSD ---
+  -
+    - XIAO: [3V3, GND_BACK, GPIO10, GPIO11, GPIO13, GPIO12, GPIO1]
+    - W_SD: [1, 2, 3, 4, 5, 6, 7]
+    - SD: [VCC, GND, CS, MOSI, MISO, SCK, CD]
+
+  # --- KY-040 rotary encoder ---
+  -
+    - XIAO: [3V3, GND_BACK, GPIO17, GPIO18, GPIO21]
+    - W_ENC: [1, 2, 3, 4, 5]
+    - ENC: [VCC, GND, CLK, DT, SW]
+
+  # --- Reset button ---
+  -
+    - XIAO: [GPIO33, GND_BACK]
+    - W_BTN_RST: [1, 2]
+    - BTN_RST: [SIG, GND]
+
+  # --- Pairing / wake button ---
+  -
+    - XIAO: [GPIO34, GND_BACK]
+    - W_BTN_PAIR: [1, 2]
+    - BTN_PAIR: [SIG, GND]
+
+  # --- RGB LED (common cathode) ---
+  -
+    - XIAO: [GPIO35, GPIO36, GPIO37, GND_BACK]
+    - W_LED: [1, 2, 3, 4]
+    - LED: [R, G, B, K]

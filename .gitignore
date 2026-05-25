@@ -26,3 +26,6 @@ secrets.toml
 # Local notes
 .notes/
 SCRATCH.md
+
+# Hardware tooling
+hardware/.venv/
