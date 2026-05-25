@@ -4,9 +4,9 @@
 //! tasks from concrete `esp-hal` types so the `mock-hardware` feature can
 //! provide host-side substitutes for unit tests.
 
-pub mod pins;
 pub mod i2s;
-pub mod mfrc522;
-pub mod sdcard;
 pub mod led;
+pub mod mfrc522;
+pub mod pins;
+pub mod sdcard;
 pub mod wifi;

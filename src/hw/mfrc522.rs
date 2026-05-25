@@ -26,11 +26,7 @@
 //! plays". Switching to IRQ is tracked as a follow-up in `PLAN.md`.
 
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
-use esp_hal::{
-    Blocking,
-    gpio::Output,
-    spi::master::Spi,
-};
+use esp_hal::{Blocking, gpio::Output, spi::master::Spi};
 use mfrc522::{
     Initialized, Mfrc522, Uid,
     comm::blocking::spi::{DummyDelay, SpiInterface},

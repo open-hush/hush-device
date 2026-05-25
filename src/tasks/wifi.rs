@@ -25,9 +25,7 @@
 //! awaits two futures at a time, so 4 KiB is comfortable.
 
 use embassy_time::{Duration, Timer};
-use esp_wifi::wifi::{
-    AuthMethod, ClientConfiguration, Configuration, WifiController, WifiEvent,
-};
+use esp_wifi::wifi::{AuthMethod, ClientConfiguration, Configuration, WifiController, WifiEvent};
 use log::{error, info};
 
 use crate::hw::wifi::WifiCredentials;

@@ -170,8 +170,7 @@ pub fn authorization_header_value(
         .expect("signature_hex is ASCII lowercase hex by construction");
     out.push_str(sig_str)
         .map_err(|_| HmacError::HeaderTooLong)?;
-    out.push_str(",ts=")
-        .map_err(|_| HmacError::HeaderTooLong)?;
+    out.push_str(",ts=").map_err(|_| HmacError::HeaderTooLong)?;
     write!(&mut out, "{ts}").map_err(|_| HmacError::HeaderTooLong)?;
     Ok(out)
 }

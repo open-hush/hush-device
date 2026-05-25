@@ -9,6 +9,6 @@
 //! cache. NVS is the source of truth for everything that must survive a
 //! card swap.
 
+pub mod cache_index;
 pub mod nvs;
 pub mod outbox;
-pub mod cache_index;

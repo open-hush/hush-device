@@ -72,5 +72,4 @@ pub const LED_B: u8 = 37;
 pub const LIGHT_SLEEP_WAKE_PINS: &[u8] =
     &[RFID_IRQ, ENCODER_CLK, ENCODER_SW, BTN_PAIRING, BTN_RESET];
 
-pub const DEEP_SLEEP_WAKE_PINS: &[u8] =
-    &[RFID_IRQ, BTN_PAIRING];
+pub const DEEP_SLEEP_WAKE_PINS: &[u8] = &[RFID_IRQ, BTN_PAIRING];

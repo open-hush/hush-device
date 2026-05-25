@@ -38,9 +38,15 @@ use esp_hal::{
     clock::CpuClock,
     dma_buffers,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
-    ledc::{LSGlobalClkSource, Ledc, LowSpeed, timer::{self, TimerIFace}},
+    ledc::{
+        LSGlobalClkSource, Ledc, LowSpeed,
+        timer::{self, TimerIFace},
+    },
     rng::Rng,
-    spi::{Mode as SpiMode, master::{Config as SpiConfig, Spi}},
+    spi::{
+        Mode as SpiMode,
+        master::{Config as SpiConfig, Spi},
+    },
     time::Rate,
     timer::timg::TimerGroup,
 };
@@ -109,8 +115,7 @@ static WIFI_INIT_CELL: StaticCell<EspWifiController<'static>> = StaticCell::new(
 async fn main(spawner: Spawner) {
     // 1. HAL bring-up. Crank the CPU to 240 MHz so audio decode + WiFi
     //    later have headroom; we drop it again in LIGHT_SLEEP (phase 4).
-    let peripherals =
-        esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // 2. PSRAM heap. Anything we allocate before this call would panic;
     //    place the allocator first. The `size:` keyword form is from
@@ -185,20 +190,12 @@ async fn main(spawner: Spawner) {
 
     // CS is driven by embedded-hal-bus's ExclusiveDevice; start it
     // high (deasserted) so the first transaction sees a clean edge.
-    let rfid_cs = Output::new(
-        peripherals.GPIO44,
-        Level::High,
-        OutputConfig::default(),
-    );
+    let rfid_cs = Output::new(peripherals.GPIO44, Level::High, OutputConfig::default());
 
     // RST: active-low. Start high to release reset. The `RfidDriver`
     // owns this `Output` for the rest of the program so the pin stays
     // high even after `main` returns into the executor.
-    let rfid_rst = Output::new(
-        peripherals.GPIO43,
-        Level::High,
-        OutputConfig::default(),
-    );
+    let rfid_rst = Output::new(peripherals.GPIO43, Level::High, OutputConfig::default());
 
     match RfidDriver::new(rfid_spi, rfid_cs, rfid_rst) {
         Ok(driver) => {
@@ -230,11 +227,7 @@ async fn main(spawner: Spawner) {
     .with_mosi(peripherals.GPIO11)
     .with_miso(peripherals.GPIO13);
 
-    let sd_cs = Output::new(
-        peripherals.GPIO10,
-        Level::High,
-        OutputConfig::default(),
-    );
+    let sd_cs = Output::new(peripherals.GPIO10, Level::High, OutputConfig::default());
 
     // Card-detect is active-low when a card is seated. Enable the
     // internal pull-up so the line floats high (= "no card") when no
@@ -283,18 +276,14 @@ async fn main(spawner: Spawner) {
     // data. Drive high → "left channel only" mode (the only one that
     // makes sense for our mono content; the duplicated L=R samples
     // in `ToneSource` then play out on L).
-    let amp_enable = Output::new(
-        peripherals.GPIO3,
-        Level::High,
-        OutputConfig::default(),
-    );
+    let amp_enable = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
 
     let audio_output = AudioOutput::new(
         peripherals.I2S0,
         peripherals.DMA_CH0,
-        peripherals.GPIO5,  // BCLK
-        peripherals.GPIO6,  // LRC / WS
-        peripherals.GPIO4,  // DIN
+        peripherals.GPIO5, // BCLK
+        peripherals.GPIO6, // LRC / WS
+        peripherals.GPIO4, // DIN
         amp_enable,
         tx_descriptors,
     );
