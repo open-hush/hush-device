@@ -62,7 +62,7 @@ pub const MAX_AUTH_HEADER_LEN: usize = 160;
 /// `enum_variant_names` lint is fine here): every variant *is* a
 /// length overflow, and naming them after the buffer they bound
 /// keeps call-site error handling readable.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub enum HmacError {
     /// `path_with_query` exceeded [`MAX_PATH_LEN`].
