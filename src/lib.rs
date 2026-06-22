@@ -19,8 +19,46 @@
 extern crate std;
 
 /// HMAC-SHA256 device-request signing. Canonical form: see
-/// `hush-protocol/docs/auth.md`. Re-exported from `src/api/hmac.rs`
-/// so the firmware bin's `mod api { mod hmac; }` keeps owning the file
-/// and there is exactly one source of truth.
-#[path = "api/hmac.rs"]
-pub mod hmac;
+/// `hush-protocol/docs/auth.md`.
+///
+/// The modules below mirror the firmware's own `crate::api` / `crate::proto`
+/// / `crate::storage` tree via `#[path]` so that any `crate::…` reference
+/// inside a re-exported file resolves to the **same** path in both the bin
+/// (Xtensa) and this host-test lib. Each file keeps the firmware's
+/// Xtensa-only I/O behind `#[cfg(target_arch = "xtensa")]`, so on the host
+/// only its pure, allocation-free logic compiles in.
+pub mod api {
+    #[path = "hmac.rs"]
+    pub mod hmac;
+
+    /// Pure request-building helpers (path+query canonicalization, signed
+    /// header assembly, HTTP status → outcome mapping). The `reqwless`
+    /// transport itself is Xtensa-gated inside the file.
+    #[path = "client.rs"]
+    pub mod client;
+}
+
+pub mod proto {
+    /// Wire types mirroring `hush-protocol/hush-api.yaml`.
+    #[path = "api.rs"]
+    pub mod api;
+}
+
+pub mod storage {
+    /// Typed NVS records + their pure byte codec (the `esp-storage` backend
+    /// is Xtensa-gated inside the file).
+    #[path = "nvs.rs"]
+    pub mod nvs;
+
+    /// Append-only, drop-oldest event outbox ring buffer.
+    #[path = "outbox.rs"]
+    pub mod outbox;
+}
+
+/// Embedded TLS trust anchors (ISRG Root X1). Pure data.
+pub mod certs;
+
+/// Compile-time configuration consts (API base URL, sync interval, …).
+/// Mirrored here so `crate::config::…` references inside re-exported
+/// modules resolve to the same path in the bin and this lib.
+pub mod config;

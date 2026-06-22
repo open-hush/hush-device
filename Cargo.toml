@@ -139,14 +139,34 @@ esp-wifi = { version = "=0.14.0", features = ["esp32s3", "wifi", "log-04"] }
 # which is already part of the HAL — no extra crate needed beyond what's
 # pulled in transitively above.
 
-# ---- Deferred to later phases (uncomment when the task lands) --------------
+# ---- Phase 2 on-target I/O — gated behind the `phase2-io` feature ----------
 #
-# Phase 2 — sync with backend:
-#   embassy-net   = { version = "0.6", features = ["dhcpv4", "dns", "tcp"] }
-#   reqwless      = { version = "...", default-features = false, features = ["embedded-tls"] }
-#   embedded-tls  = { version = "...", default-features = false }
-#   sequential-storage = "..."
-#   esp-storage   = { version = "...", features = ["esp32s3"] }
+# These crates back the flash-NVS persistence and the HTTPS/TLS transport.
+# They are `optional` and only compiled under `--features phase2-io` so the
+# default `cargo build --target xtensa-esp32s3-none-elf` keeps the Phase 1
+# baseline green while we pin the exact versions for this finicky
+# `esp-hal 1.0.0-beta.1` generation (see the esp-wifi pinning note above) and
+# confirm the `reqwless` TLS API on the bench. The pure logic that drives
+# them (wire types, NVS codec, request signing, outbox, trust anchors) is
+# always compiled and host-tested — only the device I/O is behind the flag.
+#
+# embassy-net: IP stack (DHCPv4 + DNS + TCP) over the esp-wifi STA device.
+embassy-net = { version = "0.6", features = ["dhcpv4", "dns", "tcp", "medium-ethernet"], optional = true }
+# reqwless: minimal async HTTP/1.1 client; `embedded-tls` backend for HTTPS.
+reqwless = { version = "0.13", default-features = false, features = ["embedded-tls"], optional = true }
+# Internal-flash NVS: typed KV over a wear-levelled log in the `nvs` /
+# `storage` partitions. esp-storage provides the NorFlash impl for the
+# ESP32-S3 internal flash.
+sequential-storage = { version = "4", optional = true }
+esp-storage = { version = "0.5", features = ["esp32s3"], optional = true }
+embedded-storage = { version = "0.3", optional = true }
+# Async NorFlash trait `sequential-storage` v4 is generic over; `main` lifts
+# the blocking `esp_storage::FlashStorage` into it via
+# `embassy-embedded-hal`'s `BlockingAsync` adapter.
+embedded-storage-async = { version = "0.4", optional = true }
+embassy-embedded-hal = { version = "0.3", optional = true }
+
+# ---- Deferred to later phases (uncomment when the task lands) --------------
 #
 # Phase 3 — audio cache on SD: already wired above (Phase 1 closed the
 # bring-up). MP3 decoder:
@@ -170,6 +190,18 @@ debug = true
 [features]
 default = []
 mock-hardware = []
+# On-target Phase 2 I/O: flash-NVS persistence + HTTPS/TLS transport. Off by
+# default so the baseline device build needs none of the networking/flash
+# crates; the bench bring-up turns it on. See the deps block above.
+phase2-io = [
+    "dep:embassy-net",
+    "dep:reqwless",
+    "dep:sequential-storage",
+    "dep:esp-storage",
+    "dep:embedded-storage",
+    "dep:embedded-storage-async",
+    "dep:embassy-embedded-hal",
+]
 
 [dev-dependencies]
 # Reserved for host-side tests in phase 1+

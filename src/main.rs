@@ -56,6 +56,7 @@ use static_cell::StaticCell;
 
 mod api;
 mod audio;
+mod certs;
 mod config;
 mod error;
 mod hw;
