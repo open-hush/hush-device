@@ -7,4 +7,5 @@
 
 pub mod api;
 pub mod events;
+pub mod improv;
 pub mod led;
