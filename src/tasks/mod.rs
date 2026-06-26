@@ -5,6 +5,10 @@
 //! communication uses channels declared in [`crate::proto::events`].
 
 pub mod audio;
+/// BLE Improv Wi-Fi pairing task (Phase 5). On-target only, gated behind
+/// the `ble-improv` feature.
+#[cfg(feature = "ble-improv")]
+pub mod ble;
 pub mod cache;
 pub mod input;
 pub mod led;

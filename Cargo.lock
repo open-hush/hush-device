@@ -148,6 +148,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bt-hci"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa7f7c19df9648c1da4f5356c4256533e38bd65633b6a41654922475a1c6d777"
+dependencies = [
+ "embassy-sync 0.7.2",
+ "embedded-io",
+ "embedded-io-async",
+ "futures-intrusive",
+ "heapless 0.8.0",
+]
+
+[[package]]
 name = "buffered-io"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -972,6 +985,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f0e7cc4d0ceed4117e0f190abba1f021d986a5b6a54ef2116541e4288b700a9"
 dependencies = [
  "allocator-api2",
+ "bt-hci",
  "cfg-if",
  "critical-section",
  "document-features",
@@ -1050,6 +1064,16 @@ name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-intrusive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d930c203dd0b6ff06e0201a4a2fe9149b43c684fd4420555b26d21b1a02956f"
+dependencies = [
+ "futures-core",
+ "lock_api",
+]
 
 [[package]]
 name = "futures-sink"
@@ -1240,6 +1264,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 name = "hush-device"
 version = "0.1.0"
 dependencies = [
+ "bt-hci",
  "embassy-embedded-hal 0.3.2",
  "embassy-executor",
  "embassy-futures",
