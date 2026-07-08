@@ -336,4 +336,17 @@ async fn main(spawner: Spawner) {
             log::error!("wifi: esp-wifi init failed: {err:?}");
         }
     }
+
+    // TODO(phase-5): on first boot (no Wi-Fi creds in NVS), bring the BLE
+    // radio up and spawn the Improv pairing task instead of / alongside the
+    // STA join above:
+    //
+    //   let controller = crate::hw::ble::ble_controller(init, peripherals.BT);
+    //   let gatt = /* concrete ImprovGatt over the chosen host stack */;
+    //   spawner.spawn(ble_pairing_task(gatt, provisioner));
+    //
+    // The Improv protocol core (`crate::proto::improv`) and the pairing
+    // orchestration (`crate::tasks::ble::run_pairing`) are ready; the
+    // concrete GATT server is the bench-pending piece (see
+    // `docs/adr/0001-ble-host-stack.md`).
 }

@@ -42,6 +42,12 @@ pub mod proto {
     /// Wire types mirroring `hush-protocol/hush-api.yaml`.
     #[path = "api.rs"]
     pub mod api;
+
+    /// Improv Wi-Fi BLE protocol core (RPC framing + provisioning state
+    /// machine). Pure logic, host-tested; the BLE radio / GATT bring-up
+    /// that drives it is Xtensa-only and lives in `crate::tasks::ble`.
+    #[path = "improv.rs"]
+    pub mod improv;
 }
 
 pub mod storage {

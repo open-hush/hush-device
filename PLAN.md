@@ -175,11 +175,21 @@ Acceptance: 24 hours of mixed use on a single charge without crash; idle drain m
 
 Acceptance: user sets up the device from the mobile app with no cables and no edited files.
 
-- [ ] GATT server with Improv WiFi service UUIDs.
-- [ ] Receive SSID + password over BLE.
-- [ ] Attempt WiFi connect; report status back over BLE characteristic.
-- [ ] Trigger `POST /v1/device/register` on success.
-- [ ] Tear down BLE stack after pairing (frees ~30 KB RAM).
+Improv protocol core + provisioning state machine are done and host-tested
+(`src/proto/improv.rs`, `cargo test --features mock-hardware`). The BLE radio
+bring-up (`src/hw/ble.rs::ble_controller`) and pairing orchestration
+(`src/tasks/ble.rs::run_pairing`) compile for the target behind the
+`ble-improv` feature. The concrete GATT host-stack implementation is the only
+bench-pending piece — see `docs/adr/0001-ble-host-stack.md`.
+
+- [x] Improv RPC framing + checksums + state machine (pure, host-tested).
+- [x] Improv service / characteristic UUIDs (match the published standard).
+- [x] BLE HCI controller bring-up (esp-wifi `BleConnector` → `bt-hci` `ExternalController`).
+- [x] Pairing task orchestration driving the state machine + LED indications.
+- [ ] Concrete `ImprovGatt` GATT server (pick host stack — ADR 0001). **(bench)**
+- [ ] Concrete `WifiProvisioner` (join + persist creds + register). **(bench)**
+- [ ] Spawn pairing task from `main.rs` on first boot. **(bench)**
+- [ ] On-hardware validation: advertise → provision → join → register → teardown. **(bench)**
 
 ## Phase 6 — OTA (~2 weeks)
 
@@ -224,6 +234,7 @@ Acceptance: backend can push a new firmware build to a device; rollback is autom
 - **Battery low-voltage cutoff**: cut at 3.4 V or 3.3 V? Sparkfun PCM cuts at 2.5 V (too low). We probably want to refuse to start below 3.4 V to protect the cells. Confirm on bench.
 - **SD card spec**: 8 GB or 16 GB high-endurance as recommended default? Document the part number families known to work.
 - **TLS root certs**: bundle ISRG Root X1 only (Let's Encrypt), or DigiCert + Amazon Root too? Smaller = faster boot. Default ISRG only unless we hit issues.
+- **BLE GATT host stack** (Phase 5): `trouble-host` vs `bleps` on top of the `bt-hci` controller. Recommendation + rationale in `docs/adr/0001-ble-host-stack.md`; confirm on bench.
 
 ---
 
@@ -231,7 +242,7 @@ Acceptance: backend can push a new firmware build to a device; rollback is autom
 
 - `hush-protocol/hush-api.yaml` — wire types in `src/proto/api.rs` and `src/proto/events.rs` must match. Drift is caught by CI (TODO: add `oapi-codegen` style check).
 - `hush-backend` — `POST /v1/device/register` must return `claimCode` for the user dashboard.
-- `hush-app` — BLE Improv WiFi pairing flow (phase 5) must agree on service UUIDs and characteristic shapes.
+- `hush-app` — BLE Improv WiFi pairing flow (phase 5) must agree on service UUIDs and characteristic shapes. UUIDs + RPC byte layout are now pinned in `src/proto/improv.rs` (the published Improv standard); `hush-app/lib/ble/improv.ts` consumes the same.
 
 ---
 

@@ -148,8 +148,20 @@ embedded-sdmmc = { version = "0.9", default-features = false, features = ["log"]
 # Default features (`builtin-scheduler`, `esp-alloc`) intentionally
 # kept on. `log-04` (renamed from `log` mid-beta) routes esp-wifi's
 # internal traces through our `log` 0.4 sink. The `ble` feature lands
-# with the Phase 5 BLE Improv task, not now.
+# enabled by our `ble-improv` feature (see the [features] table).
 esp-wifi = { version = "=0.14.0", features = ["esp32s3", "wifi", "log-04"] }
+
+# ---- Phase 5 BLE Improv Wi-Fi — gated behind the `ble-improv` feature -------
+#
+# esp-wifi's `BleConnector` (turned on by the `ble` feature, which our
+# `ble-improv` feature pulls in) already implements
+# `bt_hci::transport::Transport`. `bt-hci`'s `ExternalController` lifts that
+# transport into the `Controller` trait a GATT host stack consumes. Pinned to
+# the same `0.3` line esp-wifi 0.14.0 depends on so the `Transport` /
+# `Controller` traits resolve to one copy. Optional + off by default so the
+# baseline device build carries none of the BLE stack; the pure Improv
+# protocol core (`src/proto/improv.rs`) is host-tested regardless.
+bt-hci = { version = "0.3", default-features = false, optional = true }
 
 # Random source for `esp-wifi::init` (PHY calibration uses it). `esp-hal`
 # exposes the trait, but the bound is satisfied by `esp_hal::rng::Rng`
@@ -218,6 +230,16 @@ phase2-io = [
     "dep:embedded-storage",
     "dep:embedded-storage-async",
     "dep:embassy-embedded-hal",
+]
+# On-target Phase 5 BLE Improv Wi-Fi provisioning: turns on esp-wifi's BLE
+# controller + the bt-hci HCI layer used to bring the radio up. Off by default
+# for the same reason as `phase2-io` — the baseline build stays minimal and
+# the BLE host-stack choice is still being pinned on the bench (see
+# `docs/adr/0001-ble-host-stack.md`). The Improv protocol state machine is
+# compiled and host-tested with or without this flag.
+ble-improv = [
+    "esp-wifi/ble",
+    "dep:bt-hci",
 ]
 
 [dev-dependencies]
