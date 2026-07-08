@@ -1,5 +1,5 @@
 //! LED task — owns the [`crate::hw::led::LedDriver`] and renders the
-//! current [`LedState`] onto the three LEDC channels.
+//! current [`LedState`] onto the single WS2812 status LED.
 //!
 //! Listens on [`crate::proto::led::LED_CHAN`] for state updates. While a
 //! blink pattern is active, the task wakes itself every half-period to

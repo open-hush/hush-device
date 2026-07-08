@@ -100,6 +100,23 @@ embassy-time = "0.4"
 embassy-sync = "0.6"
 embassy-futures = "0.1"
 
+# Shared SPI bus guard (v1 hardware) — Phase 1. The XIAO's 11 pads force the
+# RFID reader and microSD onto ONE SPI bus; embedded-hal-bus's
+# `CriticalSectionDevice` (already a dep) wraps it, guarded by this crate's
+# critical-section `Mutex`.
+critical-section = "1"
+
+# Single WS2812 / NeoPixel status LED over the RMT peripheral — Phase 1 (v1
+# replaced the 3-GPIO LEDC LED). `smart-leds` is the generic `SmartLedsWrite`
+# trait + `RGB8`; `esp-hal-smartled` is the esp-hal RMT adapter.
+# TODO(bench): pin these against `esp-hal 1.0.0-beta.1` the way `esp-wifi` was
+# (see the note there). The crates.io release of `esp-hal-smartled` that links
+# against beta.1 must be confirmed — it may need a git rev — and the
+# `SmartLedsAdapter` channel type / buffer const in `hw/led.rs` verified with
+# `cargo check`.
+smart-leds = "0.4"
+esp-hal-smartled = "0.15"
+
 # PSRAM allocator. Activated as soon as main.rs comes up so any later `alloc`
 # need (TLS, JSON parsing into a heapless overflow) is served from PSRAM.
 # Pinned to 0.8 because esp-wifi 0.14 transitively depends on the same

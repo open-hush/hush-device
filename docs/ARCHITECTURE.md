@@ -67,11 +67,11 @@ Task stacks are dimensioned per-task and documented in [`src/tasks/*.rs`](../src
        v                                                 │
   IDLE ─── card_scanned (unknown) ──> NOTIFY_UNKNOWN ────┘
    │                                                     │
-   │ encoder_press                                       │
+   │ button_press                                       │
    v                                                     │
   PLAYING ─── card_scanned (different) ──> FADE_SWAP ────┘
    │
-   │ encoder_press OR card_removed
+   │ button_press OR card_removed
    v
   IDLE
 ```
@@ -82,7 +82,7 @@ This is the user-visible playback state. Each transition publishes an `Event` so
 
 Everything in [`src/hw/`](../src/hw/) is intended to compile under both the real HAL (`xtensa-esp32s3-none-elf`) and a host target with the `mock-hardware` feature. Tasks consume traits (not concrete types) so the host-side substitutes can stand in for unit tests.
 
-> TODO(phase-1): finalise the trait surface. Candidates: `Led`, `RfidReader`, `SdCard`, `I2sOut`, `Encoder`.
+> TODO(phase-1): finalise the trait surface. Candidates: `Led`, `RfidReader`, `SdCard`, `I2sOut`, `Button`. (v1 drops the rotary encoder — single multifunction button instead; play/pause is a button press.)
 
 ## Boot sequence
 

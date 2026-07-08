@@ -1,52 +1,37 @@
-//! RGB LED driver via three LEDC PWM channels.
+//! RGB status LED driver — a single WS2812 / NeoPixel over the RMT peripheral.
 //!
-//! The board uses a **common-cathode** RGB LED on `LED_R` / `LED_G` /
-//! `LED_B`: writing a 0 duty cycle turns a channel off, max duty turns it
-//! fully on. Gamma correction is applied so linear 0..=255 input produces
-//! visually linear output rather than the wash-out you get when the
-//! perceptual response curve goes unmodelled.
+//! v1 replaced the earlier 3-GPIO common-cathode LED (LEDC PWM) with one
+//! addressable WS2812 on a single data pin ([`crate::hw::pins::LED_WS2812`]).
+//! The WS2812's on-die controller does the PWM, so full 24-bit colour comes
+//! from one GPIO — which is what lets the whole device fit the XIAO's 11 pads.
 //!
-//! ## PWM configuration
+//! The [`RgbLed`] trait seam is unchanged, so [`crate::tasks::led`] does not
+//! care that the backend switched from LEDC to WS2812: it still calls
+//! [`RgbLed::set_rgb`] with linear 0..=255 components and this module applies
+//! the gamma LUT before handing bytes to the LED.
 //!
-//! - **Timer**: LEDC low-speed Timer0, clocked off the APB clock.
-//! - **Resolution**: 8 bits (256 duty levels). 24-bit colour input means
-//!   gamma correction can use the full byte without truncation visible to
-//!   the eye.
-//! - **Frequency**: [`LED_PWM_FREQ_HZ`] Hz. Well above the human flicker
-//!   threshold (~60 Hz at the lowest), well below the I2S audio band so any
-//!   stray switching noise is inaudible, and far enough from the LEDC clock
-//!   divider's resolution floor at 8-bit duty.
-//!
-//! ## Trait split and lifetime model
-//!
-//! [`RgbLed`] is the abstract interface the LED task talks to; the
-//! `mock-hardware` feature can ship a host-side substitute that records
-//! the last `set_rgb` call into a buffer for unit tests. The concrete
-//! [`LedDriver`] is built in `main` from a `'static` LEDC timer reference
-//! (so the channels can outlive the constructor stack frame and be moved
-//! into an embassy task) and the three GPIOs sourced from
-//! [`crate::hw::pins`].
+//! TODO(bench): `esp-hal-smartled` + `smart-leds` must be version-pinned
+//! against `esp-hal 1.0.0-beta.1` the same way `esp-wifi` was (see PLAN.md /
+//! Cargo.toml). The [`SmartLedsAdapter`] channel type and [`LED_RMT_BUFFER`]
+//! const below are written without a compiler in the loop and need a
+//! `cargo check --target xtensa-esp32s3-none-elf` pass to confirm.
 
 use esp_hal::{
+    Blocking,
     gpio::AnyPin,
-    ledc::{
-        LowSpeed,
-        channel::{self, Channel, ChannelHW, ChannelIFace},
-        timer::{self, Timer},
-    },
+    rmt::{Channel, ChannelCreator},
 };
+use esp_hal_smartled::{SmartLedsAdapter, buffer_size};
+use smart_leds::{RGB8, SmartLedsWrite};
 
-/// PWM carrier frequency. 1 kHz is high enough to be invisible (the eye
-/// fuses anything above ~80 Hz), low enough that the LEDC clock divider
-/// keeps full 8-bit resolution at the APB clock, and outside the audible
-/// band so it does not couple into the speaker amplifier later.
-pub const LED_PWM_FREQ_HZ: u32 = 1_000;
+/// Number of LEDs on the status chain — one.
+pub const LED_COUNT: usize = 1;
 
-/// Duty resolution. 8 bits gives 256 levels per channel, matches the
-/// `u8` colour input, and keeps the gamma table lossless on the output
-/// side.
-pub const LED_PWM_DUTY_BITS: u32 = 8;
-const LED_PWM_DUTY_MAX: u32 = (1 << LED_PWM_DUTY_BITS) - 1;
+/// RMT symbol-buffer length for [`LED_COUNT`] WS2812 pixels. `buffer_size` is
+/// a `const fn`, so this stays a plain associated const (no
+/// `generic_const_exprs` needed) and can be used as the adapter's const
+/// generic argument.
+pub const LED_RMT_BUFFER: usize = buffer_size(LED_COUNT);
 
 /// Gamma look-up table built at compile time. A quadratic curve
 /// (`out = i² / 255`) approximates a 2.0 gamma closely enough for the
@@ -63,111 +48,55 @@ const GAMMA_LUT: [u8; 256] = {
     lut
 };
 
-/// Errors the LED driver can surface. Configuration errors are the only
-/// ones surfaced at runtime; once the channels are configured, `set_rgb`
-/// only writes the duty register and cannot fail at the HAL level.
+/// Errors the LED driver can surface.
 #[derive(Debug)]
 pub enum LedError {
-    /// `esp-hal` rejected the channel configuration (bad pin, conflicting
-    /// timer speed, etc.).
-    Configure(channel::Error),
-}
-
-impl From<channel::Error> for LedError {
-    fn from(value: channel::Error) -> Self {
-        Self::Configure(value)
-    }
-}
-
-/// Convert the bit-resolution constant into the typed enum that
-/// `esp-hal` consumes for timer configuration. Pulled out of `main` so
-/// the bit count is owned by this module.
-pub const fn pwm_duty_resolution() -> timer::config::Duty {
-    match LED_PWM_DUTY_BITS {
-        5 => timer::config::Duty::Duty5Bit,
-        8 => timer::config::Duty::Duty8Bit,
-        10 => timer::config::Duty::Duty10Bit,
-        12 => timer::config::Duty::Duty12Bit,
-        _ => panic!("unsupported LED_PWM_DUTY_BITS — extend pwm_duty_resolution"),
-    }
+    /// The RMT transmit of the WS2812 bit-stream failed. Not fatal — the LED
+    /// task logs and keeps going (LED writes are never on a hot path).
+    Write,
 }
 
 /// Abstract RGB LED. The LED task depends on this trait, not on the
 /// concrete [`LedDriver`], so a host-side mock can be swapped in under
 /// the `mock-hardware` feature.
 pub trait RgbLed {
-    /// Drive the three channels. `r`, `g`, `b` are linear 0..=255; the
-    /// implementation is expected to apply gamma correction before
-    /// writing the LEDC duty register.
+    /// Drive the LED. `r`, `g`, `b` are linear 0..=255; the implementation
+    /// applies gamma correction before emitting the WS2812 frame.
     fn set_rgb(&mut self, r: u8, g: u8, b: u8) -> Result<(), LedError>;
 }
 
-/// Concrete LED driver: owns the three configured LEDC channels.
+/// Concrete LED driver: owns the WS2812 RMT adapter.
 ///
-/// The channels internally reference a [`Timer`] that must outlive the
-/// driver. In `main` we allocate the timer in a [`static_cell::StaticCell`]
-/// so its lifetime is `'static`, then move the driver into the LED
-/// embassy task.
+/// Built in `main` from RMT channel 0 and the [`crate::hw::pins::LED_WS2812`]
+/// data pin, then moved into the LED embassy task. The RMT symbol buffer lives
+/// inside the adapter, sized by [`LED_RMT_BUFFER`].
 pub struct LedDriver {
-    channel_r: Channel<'static, LowSpeed>,
-    channel_g: Channel<'static, LowSpeed>,
-    channel_b: Channel<'static, LowSpeed>,
+    adapter: SmartLedsAdapter<Channel<Blocking, 0>, LED_RMT_BUFFER>,
 }
 
 impl LedDriver {
-    /// Build the driver from a pre-configured `'static` LEDC timer
-    /// reference and the three GPIO pins sourced from
-    /// [`crate::hw::pins`]. The pins must be passed in already converted
-    /// to [`AnyPin`] (via `pin.degrade()` in main) so this signature
-    /// stays free of the per-GPIO marker types.
-    pub fn new(
-        timer: &'static Timer<'static, LowSpeed>,
-        pin_r: AnyPin<'static>,
-        pin_g: AnyPin<'static>,
-        pin_b: AnyPin<'static>,
-    ) -> Result<Self, LedError> {
-        let channel_r = configure_channel(timer, channel::Number::Channel0, pin_r)?;
-        let channel_g = configure_channel(timer, channel::Number::Channel1, pin_g)?;
-        let channel_b = configure_channel(timer, channel::Number::Channel2, pin_b)?;
-        Ok(Self {
-            channel_r,
-            channel_g,
-            channel_b,
-        })
+    /// Build the driver from RMT channel-0's `ChannelCreator` (what
+    /// `Rmt::channel0` hands out) and the WS2812 data pin (already converted to
+    /// [`AnyPin`] via `pin.degrade()` in `main`). `SmartLedsAdapter::new`
+    /// consumes the creator and configures it into the `Channel<Blocking, 0>`
+    /// stored in [`Self::adapter`].
+    pub fn new(channel: ChannelCreator<Blocking, 0>, pin: AnyPin<'static>) -> Self {
+        let adapter = SmartLedsAdapter::new(channel, pin, [0u32; LED_RMT_BUFFER]);
+        Self { adapter }
     }
 }
 
 impl RgbLed for LedDriver {
     fn set_rgb(&mut self, r: u8, g: u8, b: u8) -> Result<(), LedError> {
-        write_channel(&self.channel_r, GAMMA_LUT[r as usize]);
-        write_channel(&self.channel_g, GAMMA_LUT[g as usize]);
-        write_channel(&self.channel_b, GAMMA_LUT[b as usize]);
-        Ok(())
+        let colour = RGB8::new(
+            GAMMA_LUT[r as usize],
+            GAMMA_LUT[g as usize],
+            GAMMA_LUT[b as usize],
+        );
+        self.adapter
+            .write([colour].into_iter())
+            .map_err(|_| LedError::Write)
     }
-}
-
-fn configure_channel(
-    timer: &'static Timer<'static, LowSpeed>,
-    number: channel::Number,
-    pin: AnyPin<'static>,
-) -> Result<Channel<'static, LowSpeed>, LedError> {
-    let mut channel = Channel::new(number, pin);
-    channel.configure(channel::config::Config {
-        timer,
-        duty_pct: 0,
-        pin_config: channel::config::PinConfig::PushPull,
-    })?;
-    Ok(channel)
-}
-
-fn write_channel(channel: &Channel<'_, LowSpeed>, gamma_corrected: u8) {
-    // Scale the gamma-corrected u8 (0..=255) to the timer's HW duty
-    // range. At 8-bit resolution this is the identity; at higher
-    // resolutions it scales linearly. We use the HW path so we keep full
-    // 256-level granularity instead of the 101 levels the percent-based
-    // `set_duty` API would give us.
-    let duty = (gamma_corrected as u32) * LED_PWM_DUTY_MAX / 255;
-    channel.set_duty_hw(duty);
 }
 
 // ---------------------------------------------------------------------

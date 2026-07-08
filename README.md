@@ -14,11 +14,11 @@ Hush is an open-source RFID-activated audio device for children — see [open-hu
 | Component | Part |
 |---|---|
 | MCU | Seeed Studio XIAO ESP32-S3 (8 MB PSRAM) |
-| Audio | MAX98357A I2S amp + 4–8 Ω 3 W speaker |
+| Audio | MAX98357A I2S amp + 8 Ω 3 W passive speaker |
 | RFID | MFRC522 (SPI, MIFARE Classic 13.56 MHz) |
-| Storage | microSD via SPI (high-endurance, 8–32 GB) |
-| Input | KY-040 encoder + 2 tactile buttons |
-| Feedback | RGB LED (common cathode, 3× GPIO via LEDC PWM) |
+| Storage | microSD via SPI, **shared bus with RFID** (high-endurance, 8–32 GB) |
+| Input | 1 multifunction button (v1; rotary encoder deferred — no free pins) |
+| Feedback | Single WS2812 status LED (one data pin, RMT) |
 | Power | Li-Po 3.7 V 2000 mAh (Sparkfun 505060), USB-C charging |
 
 Full pin map: [`docs/PIN_MAP.md`](./docs/PIN_MAP.md). The canonical pin definitions live in [`src/hw/pins.rs`](./src/hw/pins.rs).

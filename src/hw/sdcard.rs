@@ -1,21 +1,25 @@
-//! microSD bring-up over SPI3 using `embedded-sdmmc`.
+//! microSD bring-up over the shared SPI bus using `embedded-sdmmc`.
 //!
 //! Phase-1 goal: prove the SPI link to the card works, log the card
 //! size, and successfully mount the first FAT32 volume from the MBR.
 //! The cache task (phase 3) will own the driver from then on; this
 //! module keeps the [`SdCardDriver`] alive in a `'static` so phase 3
-//! can pick it up without re-claiming SPI3 from the consumed
+//! can pick it up without re-claiming the SPI bus from the consumed
 //! `Peripherals` struct.
 //!
 //! ## Wiring
 //!
-//! - SPI3: SCK [`crate::hw::pins::SD_SCK`], MOSI
-//!   [`crate::hw::pins::SD_MOSI`], MISO [`crate::hw::pins::SD_MISO`].
-//! - Chip select [`crate::hw::pins::SD_CS`] (active-low, driven by
-//!   [`embedded_hal_bus::spi::ExclusiveDevice`]).
-//! - Card-detect [`crate::hw::pins::SD_CD`] (active-low when a card
-//!   is inserted). Read once at boot for a present/absent log line;
-//!   IRQ-on-insertion is a phase-3 concern.
+//! - Shared SPI bus: SCK [`crate::hw::pins::SPI_SCK`], MOSI
+//!   [`crate::hw::pins::SPI_MOSI`], MISO [`crate::hw::pins::SPI_MISO`] — the
+//!   same bus the MFRC522 hangs off (XIAO has no room for two SPI buses).
+//! - Chip select [`crate::hw::pins::SD_CS`] (active-low).
+//! - Card-detect: **no pin** — no free GPIO in the XIAO's 11-pad budget.
+//!   Card presence is inferred at mount (a failed init == "no card") rather
+//!   than from a dedicated CD line.
+//!
+//! TODO(hw-reconcile): the CS wrapper below still uses `ExclusiveDevice`,
+//! which owns the whole bus. Once RFID + microSD truly share one bus this
+//! must become a shared-bus `SpiDevice`. Tracked in `PLAN.md`.
 //!
 //! ## Clocking
 //!
@@ -33,26 +37,22 @@
 //! use case (whose entries are short-lived and identified by SHA-256,
 //! not mtime) this is harmless.
 
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
+use embedded_hal_bus::spi::CriticalSectionDevice;
 use embedded_sdmmc::{
     Error as SdMmcError, SdCard, SdCardError, TimeSource, Timestamp, VolumeIdx, VolumeManager,
 };
-use esp_hal::{
-    Blocking,
-    delay::Delay,
-    gpio::{Input, Output},
-    spi::master::Spi,
-};
+use esp_hal::{Blocking, delay::Delay, gpio::Output, spi::master::Spi};
 
 /// SPI clock for first bring-up. SD spec mandates the init handshake
 /// at ≤ 400 kHz; we sit at the upper end so card detection still
 /// completes in well under a second.
 pub const SD_INIT_SPI_HZ: u32 = 400_000;
 
-/// Concrete SPI device type: SPI3 bus + dedicated CS pin, plumbed
-/// through `embedded-hal-bus`'s `ExclusiveDevice` with no inter-byte
-/// delay (SD over SPI doesn't need one).
-pub type SdSpiDevice = ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, NoDelay>;
+/// Concrete SPI device type: a per-device handle onto the **shared** SPI bus
+/// (RFID + microSD share one bus on the XIAO), combining the `'static`
+/// critical-section-guarded bus with the microSD's dedicated CS pin.
+pub type SdSpiDevice =
+    CriticalSectionDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>;
 
 /// Concrete `SdCard` handle the rest of the firmware can borrow from
 /// the `'static` storage in `main`.
@@ -137,10 +137,6 @@ const fn card_error_tag(err: SdCardError) -> &'static str {
 /// against them without restructuring.
 pub struct SdCardDriver {
     pub volume_mgr: SdVolumeManager,
-    /// Held for the lifetime of the driver so its log line at boot
-    /// records "card present" / "card absent" without keeping a
-    /// background reader pinned.
-    pub card_detect: Input<'static>,
     /// Card size cached from the init handshake. `embedded-sdmmc 0.9`
     /// does not let us re-read it through `VolumeManager` without
     /// hitting an upstream API bug (the `device` closure helper has
@@ -153,28 +149,22 @@ impl SdCardDriver {
     /// Build the driver. Eagerly drives the SD init handshake so a
     /// missing or unresponsive card surfaces as an `SdError::Card`
     /// here rather than as a confusing later mount failure.
-    pub fn new(
-        spi: Spi<'static, Blocking>,
-        cs: Output<'static>,
-        card_detect: Input<'static>,
-    ) -> Result<Self, SdError> {
-        let device = ExclusiveDevice::new_no_delay(spi, cs).map_err(|_| SdError::SpiConfig)?;
+    pub fn new(device: SdSpiDevice) -> Result<Self, SdError> {
         let sdcard: SdCardHandle = SdCard::new(device, Delay::new());
         let card_size_bytes = sdcard.num_bytes().map_err(SdError::from_card)?;
         let volume_mgr = VolumeManager::new(sdcard, StubTimeSource);
         Ok(Self {
             volume_mgr,
-            card_detect,
             card_size_bytes,
         })
     }
 
-    /// Card-detect read. The KY-040-style breakout boards on the
-    /// XIAO ESP32-S3 tie this pin low when a card is seated; we
-    /// report the boolean rather than the raw level so callers don't
-    /// have to remember the active-low convention.
+    /// Whether a usable card was found. There is no card-detect pin on the
+    /// XIAO, so presence is inferred from the init handshake: reaching a
+    /// constructed driver means `num_bytes` answered, so a non-zero size is
+    /// a present, readable card.
     pub fn card_present(&self) -> bool {
-        self.card_detect.is_low()
+        self.card_size_bytes > 0
     }
 
     /// Usable card size in bytes, cached from the init handshake.
