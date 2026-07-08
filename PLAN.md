@@ -37,19 +37,27 @@ A battery-powered, child-friendly audio player that:
 
 Canonical: [`src/hw/pins.rs`](./src/hw/pins.rs). Tabular: [`docs/PIN_MAP.md`](./docs/PIN_MAP.md).
 
+> **Reconciled 2026-07-07 with the real XIAO ESP32-S3.** The board exposes only
+> **11 GPIOs** (`1,2,3,4,5,6,7,8,9,43,44`). The previous map assigned GPIO
+> `10-13,17,18,21,33-37`, none of which exist on this board — and `33-37` are
+> the module's **octal PSRAM** lines (driving them corrupts PSRAM). RFID and
+> microSD now **share one SPI bus**; the encoder, buttons and RGB LED have no
+> pins left (see Decisions open).
+
 ```
 I2S audio (MAX98357A):
-  BCLK GPIO 5, LRC GPIO 6, DIN GPIO 4, SD (mute) GPIO 3
+  BCLK GPIO 5 (D4), LRC GPIO 6 (D5), DIN GPIO 4 (D3), SD/mute GPIO 3 (D2)
 
-SPI #1 RFID (MFRC522) — SPI2:
-  SCK GPIO 7, MOSI GPIO 9, MISO GPIO 8, CS GPIO 44, RST GPIO 43, IRQ GPIO 2
+Shared SPI bus (RFID + microSD):
+  SCK GPIO 7 (D8), MISO GPIO 8 (D9), MOSI GPIO 9 (D10)
 
-SPI #2 microSD — SPI3:
-  SCK GPIO 12, MOSI GPIO 11, MISO GPIO 13, CS GPIO 10, CD GPIO 1
+RFID (MFRC522):   CS GPIO 44 (D7)   [RST: soft-reset over SPI; IRQ: polling]
+microSD:          CS GPIO 43 (D6)   [card-detect: probed at mount]
 
-Encoder KY-040: CLK GPIO 17, DT GPIO 18, SW GPIO 21
-Buttons:        Reset GPIO 33, Pairing/Wake GPIO 34
-LED RGB:        R GPIO 35, G GPIO 36, B GPIO 37
+Status LED:       WS2812 DIN GPIO 2 (D1)   [single NeoPixel, RMT-driven]
+Button:           BTN_MAIN GPIO 1 (D0)     [multifunction, RTC DEEP_SLEEP wake]
+
+Dropped in v1: KY-040 encoder, 2nd button. See "Decisions open".
 ```
 
 ---
@@ -69,6 +77,34 @@ Timeouts dashboard-configurable (`DeviceConfig.lightSleepAfterSec`, `deepSleepAf
 ## Phase 1 — Hello world hardware (~1-2 weeks)
 
 Acceptance: tap a card, see UID in the serial log, the LED changes colour, a hardcoded MP3 plays through the speaker.
+
+> ⚠️ **Hardware reconciliation done in code 2026-07-07 — NOT yet compiled/bench-verified.**
+> The bring-up was originally written against a pin map that does not fit the
+> real XIAO ESP32-S3. Now reconciled to the v1 layout across `hw/pins.rs`,
+> `main.rs`, `hw/led.rs`, `hw/mfrc522.rs`, `hw/sdcard.rs` and the docs:
+>
+> - **LED**: rewritten from 3-GPIO LEDC (GPIO 35/36/37 = octal-PSRAM, would
+>   corrupt PSRAM) to a single **WS2812** on GPIO 2 over RMT. The `RgbLed`
+>   trait seam is unchanged so `tasks/led.rs` is untouched.
+> - **SPI**: two buses (`SPI2` + `SPI3`) collapsed to **one shared bus**; RFID
+>   and microSD each get a `CriticalSectionDevice` handle on it.
+> - **RFID RST / microSD card-detect dropped** (no pins): soft-reset over SPI,
+>   presence inferred at mount.
+> - **`main.rs`** now ties each hardcoded `peripherals.GPIOn` to `hw::pins` via
+>   `const _: () = assert!(...)` drift guards.
+>
+> **`cargo check --target xtensa-esp32s3-none-elf` is GREEN (2026-07-08).**
+> `esp-hal-smartled 0.15.0` links cleanly against `esp-hal 1.0.0-beta.1` (no
+> git-rev pinning needed); `SmartLedsAdapter::new` takes the RMT
+> `ChannelCreator` (not `Channel`); `CriticalSectionDevice::new` returns
+> `Result<_, Infallible>` and is `.expect`-ed. This proves it links + typechecks
+> — **not** that it works on hardware.
+>
+> **Remaining before the `[x]` items can be checked (bench, hardware in hand):**
+> - Eye-check each bring-up on the real XIAO: WS2812 lights solid green; a
+>   MIFARE card publishes a UID over USB-CDC; a FAT32 microSD mounts; the
+>   440 Hz tone is audible through the MAX98357A + 8 Ω speaker.
+> - **Amp supply** (`3V3` vs 5 V boost) to confirm on bench.
 
 - [x] `espup install` + `cargo check --target xtensa-esp32s3-none-elf` clean on a fresh checkout.
 - [x] **Link green end to end**: `cargo build --release --target xtensa-esp32s3-none-elf` produces an ELF, `espflash save-image --chip esp32s3` produces a flashable image (~112 KB, ~2.7 % of the 4 MB app partition with the LED + RFID + SD + I2S bring-ups in).
@@ -127,13 +163,12 @@ Acceptance: tapping a known card always plays within < 500 ms when cached; cache
 - [ ] LRU eviction when free space < 10 %.
 - [ ] Cache index in `/cache/index.bin` updated on every change.
 
-## Phase 4 — Encoder, buttons, power (~1-2 weeks)
+## Phase 4 — Input & power (~1-2 weeks)
 
 Acceptance: 24 hours of mixed use on a single charge without crash; idle drain matches spec.
 
-- [ ] KY-040 rotation → volume; press → play/pause.
-- [ ] Reset button + Pairing button handlers.
-- [ ] State machine: `ACTIVE → LIGHT_SLEEP → DEEP_SLEEP` with GPIO wake.
+- [ ] `BTN_MAIN` (GPIO 1) handler: short = play/pause, long = pairing, extra-long = factory reset. (v1 has **no rotary encoder** — volume moves to the app / long-press; adding the KY-040 is a board-change, see Decisions.)
+- [ ] State machine: `ACTIVE → LIGHT_SLEEP → DEEP_SLEEP` with `BTN_MAIN` as the GPIO wake source (RTC-capable). Drive `I2S_SD` low before DEEP_SLEEP to kill the amp's ~3 mA idle draw.
 - [ ] Validate idle power on bench (< 1 mA LIGHT, < 20 µA DEEP).
 
 ## Phase 5 — BLE Improv WiFi (~2 weeks)
@@ -188,8 +223,14 @@ Acceptance: backend can push a new firmware build to a device; rollback is autom
 - **Auth to backend**: HMAC-SHA256 with a per-device 32-byte secret baked into NVS at provisioning.
 - **OTA scheme**: A/B partitions, Ed25519 signature on the binary.
 
+## Decisions taken (hardware, 2026-07-07)
+
+- **Input + LED (v1)**: RESOLVED. Drop the KY-040 rotary encoder; single **WS2812/NeoPixel** LED on GPIO 2 (its controller does the PWM); **one multifunction button** on GPIO 1 (RTC-capable, DEEP_SLEEP wake); keep amp mute on GPIO 3 for standby current; drop MFRC522 hardware RST (soft-reset over SPI) and microSD card-detect. This fits the 11 pads with no expander. Adding the encoder / a 2nd button later is a **board-change** trigger, not a quick add (an I2C expander needs 2 free pins we lack, can't PWM the LED, and clocks a fast encoder unreliably).
+
 ## Decisions open
 
+- **WS2812 driver crate**: `smart-leds` + `ws2812-spi`, or drive the WS2812 directly over the ESP32-S3 **RMT** peripheral (`esp-hal-smartled` / `esp-hal` RMT)? RMT is the idiomatic esp-hal path and frees SPI. Pin the crate before rewriting `hw/led.rs`.
+- **Amp supply**: the XIAO `5V` pad is only live over USB, not on battery. Power the MAX98357A from `3V3` (~0.5–1 W into the 8 Ω speaker, no extra parts) or add a 5 V boost (more headroom, more complexity)? Default `3V3` unless bench volume is insufficient.
 - **Battery low-voltage cutoff**: cut at 3.4 V or 3.3 V? Sparkfun PCM cuts at 2.5 V (too low). We probably want to refuse to start below 3.4 V to protect the cells. Confirm on bench.
 - **SD card spec**: 8 GB or 16 GB high-endurance as recommended default? Document the part number families known to work.
 - **TLS root certs**: bundle ISRG Root X1 only (Let's Encrypt), or DigiCert + Amazon Root too? Smaller = faster boot. Default ISRG only unless we hit issues.

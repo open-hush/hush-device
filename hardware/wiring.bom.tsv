@@ -1,15 +1,13 @@
 Id	Description	Qty	Unit	Designators
-1	Cable, 2 x 28 AWG	0	m	W_BTN_PAIR, W_BTN_RST
-2	Cable, 4 x 28 AWG	0	m	W_LED
-3	Cable, 5 x 28 AWG	0	m	W_ENC
-4	Cable, 6 x 26 AWG	0	m	W_AUDIO
-5	Cable, 7 x 26 AWG	0	m	W_SD
-6	Cable, 8 x 26 AWG	0	m	W_RFID
-7	Connector, KY-040, rotary encoder + push switch, 5 pins	1		ENC
-8	Connector, MAX98357A, I2S mono Class-D amplifier, 7 pins	1		AMP
-9	Connector, MFRC522, 13.56 MHz reader (MIFARE Classic), 8 pins	1		RFID
-10	Connector, RGB LED (common cathode), 5 mm, with 3× 220 Ω inline resistors, 4 pins	1		LED
-11	Connector, Seeed XIAO ESP32-S3, 14-pin edge + back-side pads, 28 pins	1		XIAO
-12	Connector, microSD breakout, SPI mode, 7 pins	1		SD
-13	Connector, tactile switch, pairing / DEEP_SLEEP wake, 2 pins	1		BTN_PAIR
-14	Connector, tactile switch, reset / factory chord, 2 pins	1		BTN_RST
+1	Cable, 2 x 24 AWG	0	m	W_SPK
+2	Cable, 2 x 28 AWG	0	m	W_BTN
+3	Cable, 3 x 26 AWG	0	m	W_RFID, W_SD, W_SPI
+4	Cable, 3 x 28 AWG	0	m	W_LED
+5	Cable, 6 x 26 AWG	0	m	W_AUDIO
+6	Connector, MAX98357A, I2S mono Class-D amplifier, 7 pins	1		AMP
+7	Connector, MFRC522, 13.56 MHz reader (MIFARE Classic), 6 pins	1		RFID
+8	Connector, Seeed XIAO ESP32-S3, 14-pin edge header (all usable GPIOs), 14 pins	1		XIAO
+9	Connector, Speaker, 8 Ω 3 W passive (JST), 2 pins	1		SPK
+10	Connector, WS2812 / NeoPixel, single 5 mm addressable RGB, 3 pins	1		LED
+11	Connector, microSD breakout, SPI mode (bare socket, no regulator), 6 pins	1		SD
+12	Connector, tactile switch, multifunction (play/pause · pairing · reset) + DEEP_SLEEP wake, 2 pins	1		BTN

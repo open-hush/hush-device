@@ -1,9 +1,14 @@
 metadata:
-  title: Hush — breadboard wiring
+  title: Hush — breadboard wiring (v1, XIAO ESP32-S3)
   description: |
     Pin-to-pin wiring for the Hush prototype. Hub board is the Seeed Studio
-    XIAO ESP32-S3. Canonical pin assignments live in src/hw/pins.rs; this
-    file mirrors them for assembly. Regenerate with `make` in this directory.
+    XIAO ESP32-S3, which exposes ONLY 11 GPIOs (1..9, 43, 44). Canonical pin
+    assignments live in src/hw/pins.rs; this file mirrors them for assembly.
+    Regenerate the renders with `make regen` in this directory.
+
+    v1 layout: RFID + microSD share ONE SPI bus; the status LED is a single
+    WS2812 (one data pin); one multifunction button. The rotary encoder and a
+    second button are dropped in v1 (no free pins) — see PLAN.md.
 
 options:
   bgcolor: WH
@@ -12,39 +17,26 @@ options:
 connectors:
   XIAO:
     type: Seeed XIAO ESP32-S3
-    subtype: 14-pin edge + back-side pads
+    subtype: 14-pin edge header (all usable GPIOs)
     pinlabels:
       - 3V3
-      - GND_TOP_1
+      - GND
       - 5V
-      - GPIO6
-      - GPIO5
-      - GPIO4
-      - GPIO3
-      - GPIO43
-      - GPIO2
-      - GPIO9
-      - GPIO8
-      - GPIO7
-      - GPIO44
-      - GND_TOP_2
-      - GPIO10
-      - GPIO11
-      - GPIO13
-      - GPIO12
       - GPIO1
-      - GPIO17
-      - GPIO18
-      - GPIO21
-      - GPIO33
-      - GPIO34
-      - GPIO35
-      - GPIO36
-      - GPIO37
-      - GND_BACK
+      - GPIO2
+      - GPIO3
+      - GPIO4
+      - GPIO5
+      - GPIO6
+      - GPIO7
+      - GPIO8
+      - GPIO9
+      - GPIO43
+      - GPIO44
     notes: |
-      Edge header carries 3V3, two GND pads, 5V, plus GPIO 1..9 / 43 / 44.
-      GPIO 10..37 are back-side castellated pads — solder from underneath.
+      The XIAO ESP32-S3 breaks out ONLY these 11 GPIOs. GPIO 10-13/17/18/21
+      and 33-37 are NOT available — 33-37 are the module's octal PSRAM lines
+      and must never be driven. All 11 pads are used by this design.
 
   AMP:
     type: MAX98357A
@@ -52,77 +44,81 @@ connectors:
     pinlabels: [LRC, BCLK, DIN, GAIN, SD, GND, VIN]
     notes: |
       VIN = 3V3 (single-rail, battery friendly). GAIN floating = +9 dB.
-      SD must be driven low before DEEP_SLEEP to avoid ~3 mA idle draw.
+      SD (mute) must be driven low before DEEP_SLEEP to avoid ~3 mA idle draw.
+
+  SPK:
+    type: Speaker
+    subtype: 8 Ω 3 W passive (JST)
+    pinlabels: [P, N]
+    notes: |
+      Bridge-tied (BTL) output from the MAX98357A — no common ground.
+      At 3V3 the amp delivers ~1 W into 8 Ω, which is plenty for a mono
+      near-field kids' device.
 
   RFID:
     type: MFRC522
     subtype: 13.56 MHz reader (MIFARE Classic)
-    pinlabels: [VCC, RST, GND, IRQ, MISO, MOSI, SCK, SDA]
+    pinlabels: [VCC, GND, MISO, MOSI, SCK, SDA]
     notes: |
-      3.3 V module only — never wire VCC to 5V.
-      SDA = chip-select (active low).
+      3.3 V module only — never wire VCC to 5V. SDA = chip-select (active low).
+      No RST wired (driver soft-resets over SPI); no IRQ wired (task polls).
+      SCK/MISO/MOSI are the SHARED bus, also going to the microSD.
 
   SD:
     type: microSD breakout
-    subtype: SPI mode
-    pinlabels: [CS, MOSI, MISO, SCK, GND, VCC, CD]
+    subtype: SPI mode (bare socket, no regulator)
+    pinlabels: [CS, MOSI, MISO, SCK, GND, VCC]
     notes: |
-      VCC = 3V3. CD switches to GND when a card is seated; firmware
-      reads it with an internal pull-up.
+      VCC = 3V3 (bare socket, fed 3V3 directly). SCK/MISO/MOSI are the SHARED
+      bus, also going to the MFRC522. No card-detect wired — presence is
+      inferred from the init handshake.
 
-  ENC:
-    type: KY-040
-    subtype: rotary encoder + push switch
-    pinlabels: [CLK, DT, SW, VCC, GND]
-    notes: On-module pull-ups on CLK/DT/SW (10 kΩ).
-
-  BTN_RST:
+  BTN:
     type: tactile switch
-    subtype: reset / factory chord
+    subtype: multifunction (play/pause · pairing · reset) + DEEP_SLEEP wake
     pinlabels: [SIG, GND]
-
-  BTN_PAIR:
-    type: tactile switch
-    subtype: pairing / DEEP_SLEEP wake
-    pinlabels: [SIG, GND]
+    notes: SIG to GPIO1 (RTC-capable), firmware uses an internal pull-up.
 
   LED:
-    type: RGB LED (common cathode)
-    subtype: 5 mm, with 3× 220 Ω inline resistors
-    pinlabels: [R, G, B, K]
-    notes: One 220 Ω resistor in series with each colour anode.
+    type: WS2812 / NeoPixel
+    subtype: single 5 mm addressable RGB
+    pinlabels: [DIN, VDD, GND]
+    notes: |
+      One data line does full 24-bit colour (on-die PWM). Power VDD from 3V3
+      (not 5V) so the 3.3 V data line stays within the WS2812 logic-high spec.
 
 cables:
   W_AUDIO:
     gauge: 26 AWG
     color_code: IEC
     colors: [RD, BK, BU, GN, YE, OG]
-    notes: I2S bus + 3V3 power to MAX98357A.
+    notes: I2S bus (BCLK/LRC/DIN) + mute + 3V3 power to MAX98357A.
+
+  W_SPK:
+    gauge: 24 AWG
+    color_code: IEC
+    colors: [RD, BK]
+    notes: BTL speaker output from the amp.
+
+  W_SPI:
+    gauge: 26 AWG
+    color_code: IEC
+    colors: [YE, GN, BU]
+    notes: Shared SPI bus (SCK/MISO/MOSI) — fans out to both RFID and microSD.
 
   W_RFID:
     gauge: 26 AWG
     color_code: IEC
-    colors: [RD, BK, OG, YE, GN, BU, VT, WH]
-    notes: SPI2 + RST + IRQ + 3V3 power to MFRC522.
+    colors: [RD, BK, OG]
+    notes: 3V3 + GND + CS to the MFRC522 (SPI shared via W_SPI).
 
   W_SD:
     gauge: 26 AWG
     color_code: IEC
-    colors: [RD, BK, OG, YE, GN, BU, WH]
-    notes: SPI3 + card-detect + 3V3 power to microSD breakout.
+    colors: [RD, BK, OG]
+    notes: 3V3 + GND + CS to the microSD (SPI shared via W_SPI).
 
-  W_ENC:
-    gauge: 28 AWG
-    color_code: IEC
-    colors: [RD, BK, GN, BU, YE]
-    notes: 3V3 + GND + CLK/DT/SW to KY-040.
-
-  W_BTN_RST:
-    gauge: 28 AWG
-    color_code: IEC
-    colors: [WH, BK]
-
-  W_BTN_PAIR:
+  W_BTN:
     gauge: 28 AWG
     color_code: IEC
     colors: [WH, BK]
@@ -130,48 +126,54 @@ cables:
   W_LED:
     gauge: 28 AWG
     color_code: IEC
-    colors: [RD, GN, BU, BK]
-    notes: Each colour wire passes through a 220 Ω resistor before the LED anode.
+    colors: [GN, RD, BK]
+    notes: DIN + 3V3 + GND to the WS2812.
 
 connections:
   # --- I2S audio: MAX98357A ---
   -
-    - XIAO: [3V3, GND_TOP_1, GPIO6, GPIO5, GPIO4, GPIO3]
+    - XIAO: [3V3, GND, GPIO6, GPIO5, GPIO4, GPIO3]
     - W_AUDIO: [1, 2, 3, 4, 5, 6]
     - AMP: [VIN, GND, LRC, BCLK, DIN, SD]
 
-  # --- SPI2 RFID: MFRC522 ---
+  # --- Amp to passive speaker (BTL) ---
   -
-    - XIAO: [3V3, GND_TOP_2, GPIO43, GPIO2, GPIO8, GPIO9, GPIO7, GPIO44]
-    - W_RFID: [1, 2, 3, 4, 5, 6, 7, 8]
-    - RFID: [VCC, GND, RST, IRQ, MISO, MOSI, SCK, SDA]
+    - AMP: [VIN, GND]
+    - W_SPK: [1, 2]
+    - SPK: [P, N]
 
-  # --- SPI3 microSD ---
+  # --- Shared SPI bus: XIAO to MFRC522 ---
   -
-    - XIAO: [3V3, GND_BACK, GPIO10, GPIO11, GPIO13, GPIO12, GPIO1]
-    - W_SD: [1, 2, 3, 4, 5, 6, 7]
-    - SD: [VCC, GND, CS, MOSI, MISO, SCK, CD]
+    - XIAO: [GPIO7, GPIO8, GPIO9]
+    - W_SPI: [1, 2, 3]
+    - RFID: [SCK, MISO, MOSI]
 
-  # --- KY-040 rotary encoder ---
+  # --- MFRC522 power + chip-select ---
   -
-    - XIAO: [3V3, GND_BACK, GPIO17, GPIO18, GPIO21]
-    - W_ENC: [1, 2, 3, 4, 5]
-    - ENC: [VCC, GND, CLK, DT, SW]
+    - XIAO: [3V3, GND, GPIO44]
+    - W_RFID: [1, 2, 3]
+    - RFID: [VCC, GND, SDA]
 
-  # --- Reset button ---
+  # --- Shared SPI bus: XIAO to microSD ---
   -
-    - XIAO: [GPIO33, GND_BACK]
-    - W_BTN_RST: [1, 2]
-    - BTN_RST: [SIG, GND]
+    - XIAO: [GPIO7, GPIO8, GPIO9]
+    - W_SPI: [1, 2, 3]
+    - SD: [SCK, MISO, MOSI]
 
-  # --- Pairing / wake button ---
+  # --- microSD power + chip-select ---
   -
-    - XIAO: [GPIO34, GND_BACK]
-    - W_BTN_PAIR: [1, 2]
-    - BTN_PAIR: [SIG, GND]
+    - XIAO: [3V3, GND, GPIO43]
+    - W_SD: [1, 2, 3]
+    - SD: [VCC, GND, CS]
 
-  # --- RGB LED (common cathode) ---
+  # --- Multifunction button ---
   -
-    - XIAO: [GPIO35, GPIO36, GPIO37, GND_BACK]
-    - W_LED: [1, 2, 3, 4]
-    - LED: [R, G, B, K]
+    - XIAO: [GPIO1, GND]
+    - W_BTN: [1, 2]
+    - BTN: [SIG, GND]
+
+  # --- WS2812 status LED ---
+  -
+    - XIAO: [GPIO2, 3V3, GND]
+    - W_LED: [1, 2, 3]
+    - LED: [DIN, VDD, GND]

@@ -5,20 +5,21 @@
 //! in [`crate::proto::events`] (broadcast pubsub) and per-task channels such
 //! as [`crate::proto::led::LED_CHAN`].
 //!
-//! Phase 1 currently wires:
+//! Phase 1 currently wires (v1 XIAO ESP32-S3 pin map — see `hw::pins`):
 //! - HAL bring-up + PSRAM allocator + embassy time driver + logger.
-//! - The LED RGB driver (three LEDC PWM channels on GPIO 35/36/37) and the
-//!   `led` task that consumes [`crate::proto::led::LedState`] updates.
-//! - SPI2 → MFRC522 RFID reader and the polling `rfid` task that publishes
-//!   [`crate::proto::events::Event::CardScanned`] onto
-//!   [`crate::proto::events::EVENT_BUS`].
-//! - SPI3 → microSD bring-up (400 kHz init clock, MBR + FAT32 probe of the
-//!   first partition). The [`crate::hw::sdcard::SdCardDriver`] lives in a
-//!   `'static` cell so the phase-3 cache task can pick it up without
-//!   re-claiming SPI3 from the consumed `Peripherals`.
+//! - A single WS2812 status LED (RMT, GPIO 2) and the `led` task that consumes
+//!   [`crate::proto::led::LedState`] updates.
+//! - One **shared** SPI bus (GPIO 7/8/9) carrying both the MFRC522 RFID reader
+//!   (CS GPIO 44) and the microSD (CS GPIO 43); each gets a
+//!   `CriticalSectionDevice` handle on the `'static` bus. The polling `rfid`
+//!   task publishes [`crate::proto::events::Event::CardScanned`] onto
+//!   [`crate::proto::events::EVENT_BUS`]; the [`crate::hw::sdcard::SdCardDriver`]
+//!   lives in a `'static` cell so the phase-3 cache task can borrow it.
 //! - I2S0 → MAX98357A and the `audio` task that streams a hardcoded
 //!   440 Hz sine-wave tone through the speaker. Proves the I2S DMA
 //!   path works; the SD-to-MP3-to-I2S pipeline lands in phase 3.
+//! - The main multifunction button (GPIO 1) is claimed; its handling lands in
+//!   Phase 4 (`input`/`power`).
 //!
 //! The remaining phase-1 tasks (`cache`, `sync`, `input`, `power`) land
 //! in subsequent commits.
@@ -32,16 +33,19 @@
 // phase opens. Drop this allow once every module is actively referenced.
 #![allow(dead_code)]
 
+use core::cell::RefCell;
+
+use critical_section::Mutex;
 use embassy_executor::Spawner;
+use embedded_hal_bus::spi::CriticalSectionDevice;
 use esp_backtrace as _;
 use esp_hal::{
+    Blocking,
     clock::CpuClock,
+    delay::Delay,
     dma_buffers,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pin, Pull},
-    ledc::{
-        LSGlobalClkSource, Ledc, LowSpeed,
-        timer::{self, TimerIFace},
-    },
+    rmt::Rmt,
     rng::Rng,
     spi::{
         Mode as SpiMode,
@@ -67,7 +71,7 @@ mod tasks;
 use crate::{
     hw::{
         i2s::AudioOutput,
-        led::{self, LedDriver},
+        led::LedDriver,
         mfrc522::RfidDriver,
         pins,
         sdcard::{SD_INIT_SPI_HZ, SdCardDriver},
@@ -90,14 +94,23 @@ esp_bootloader_esp_idf::esp_app_desc!();
 /// 128–160 KiB; revisit then rather than now.
 const HEAP_SIZE: usize = 96 * 1024;
 
-// Static cells for peripherals that need to outlive the `main` stack
-// frame because an embassy task references them. The LEDC peripheral
-// wrapper and its low-speed Timer0 are both kept alive for the program
-// lifetime — the three LEDC channels owned by `LedDriver` hold `'static`
-// borrows into them.
-static LEDC_CELL: StaticCell<Ledc<'static>> = StaticCell::new();
-static LEDC_TIMER_CELL: StaticCell<esp_hal::ledc::timer::Timer<'static, LowSpeed>> =
-    StaticCell::new();
+// The one shared SPI bus lives for the program lifetime: both the RFID device
+// handle (moved into the rfid task) and the SD device handle (parked in
+// `SDCARD_CELL`) borrow it, so it must outlive `main`. It is guarded by a
+// critical-section `Mutex<RefCell<…>>` so the two `SpiDevice` handles can share
+// it safely across tasks.
+static SPI_BUS_CELL: StaticCell<Mutex<RefCell<Spi<'static, Blocking>>>> = StaticCell::new();
+
+// Compile-time guard tying the typed HAL pin handles used in `main` back to the
+// canonical `hw::pins` map. The esp-hal peripheral singletons (`peripherals.
+// GPIOn`) are the only way to name a pin, so these asserts fail the build if a
+// GPIO here ever drifts from `pins.rs`.
+const _: () = assert!(pins::I2S_DIN == 4 && pins::I2S_BCLK == 5 && pins::I2S_LRC == 6);
+const _: () = assert!(pins::I2S_SD == 3);
+const _: () = assert!(pins::LED_WS2812 == 2);
+const _: () = assert!(pins::SPI_SCK == 7 && pins::SPI_MISO == 8 && pins::SPI_MOSI == 9);
+const _: () = assert!(pins::RFID_CS == 44 && pins::SD_CS == 43);
+const _: () = assert!(pins::BTN_MAIN == 1);
 
 // SD driver lives forever once initialised so the phase-3 cache task
 // can borrow it. `embedded-sdmmc` keeps a partition-table cache inside
@@ -134,33 +147,18 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
 
-    info!("hush firmware booted — bringing up LED RGB");
+    info!("hush firmware booted — bringing up status LED");
 
-    // 5. LEDC peripheral, timer and the three RGB channels.
-    let mut ledc_value = Ledc::new(peripherals.LEDC);
-    ledc_value.set_global_slow_clock(LSGlobalClkSource::APBClk);
-    let ledc: &'static Ledc<'static> = LEDC_CELL.init(ledc_value);
-
-    let mut timer_value = ledc.timer::<LowSpeed>(timer::Number::Timer0);
-    timer_value
-        .configure(timer::config::Config {
-            duty: led::pwm_duty_resolution(),
-            clock_source: timer::LSClockSource::APBClk,
-            frequency: Rate::from_hz(led::LED_PWM_FREQ_HZ),
-        })
-        .expect("ledc timer configure failed — LED_PWM_FREQ_HZ out of range");
-    let timer = LEDC_TIMER_CELL.init(timer_value);
-
-    let driver = LedDriver::new(
-        timer,
-        peripherals.GPIO35.degrade(),
-        peripherals.GPIO36.degrade(),
-        peripherals.GPIO37.degrade(),
-    )
-    .expect("led driver configure failed");
+    // 5. RMT → single WS2812 status LED on GPIO 2 (pins::LED_WS2812). The
+    //    WS2812's on-die controller does the PWM, so one data pin gives full
+    //    colour — which is what lets the whole device fit the XIAO's 11 pads.
+    //    80 MHz RMT source clock gives the ~1.25 µs WS2812 bit period enough
+    //    resolution.
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).expect("rmt init failed");
+    let led_driver = LedDriver::new(rmt.channel0, peripherals.GPIO2.degrade());
 
     spawner
-        .spawn(led_task(driver))
+        .spawn(led_task(led_driver))
         .expect("failed to spawn led task");
 
     // 6. Initial visible signal: solid green = ready. The pubsub-shaped
@@ -170,35 +168,41 @@ async fn main(spawner: Spawner) {
         .try_send(LedState::solid(Colour::Green))
         .expect("led channel rejected initial state");
 
-    info!("phase 1: LED RGB online (solid green)");
+    info!("phase 1: status LED online (solid green)");
 
-    // 7. SPI2 → MFRC522. Mode 0, 1 MHz first-bring-up clock (well
-    //    under the 10 MHz the chip supports; bump after bench
-    //    validation if poll latency matters). Pin assignments come
-    //    straight from the canonical `hw::pins` constants.
-    let _ = pins::RFID_IRQ; // wired in hardware, not consumed yet — see hw::mfrc522 docstring.
-
-    let rfid_spi = Spi::new(
+    // 7. One shared SPI bus for RFID + microSD. The XIAO has no room for two
+    //    SPI buses, so both peripherals hang off SPI2 on the canonical shared
+    //    pins (pins::SPI_SCK/MISO/MOSI) with a dedicated CS each. Mode 0,
+    //    started at the SD init clock (400 kHz) — the slowest requirement on
+    //    the bus; the MFRC522 tolerates it fine for first bring-up.
+    let spi_bus = Spi::new(
         peripherals.SPI2,
         SpiConfig::default()
-            .with_frequency(Rate::from_mhz(1))
+            .with_frequency(Rate::from_hz(SD_INIT_SPI_HZ))
             .with_mode(SpiMode::_0),
     )
-    .expect("SPI2 config failed")
+    .expect("shared SPI config failed")
     .with_sck(peripherals.GPIO7)
     .with_mosi(peripherals.GPIO9)
     .with_miso(peripherals.GPIO8);
 
-    // CS is driven by embedded-hal-bus's ExclusiveDevice; start it
-    // high (deasserted) so the first transaction sees a clean edge.
+    // Park the bus in a 'static critical-section mutex so both device handles
+    // can share it (the SD handle outlives `main`).
+    let spi_bus: &'static Mutex<RefCell<Spi<'static, Blocking>>> =
+        SPI_BUS_CELL.init(Mutex::new(RefCell::new(spi_bus)));
+
+    // `CriticalSectionDevice::new` returns `Result<_, Infallible>` (its only
+    // failure would be the CS pin's `Error`, which is `Infallible` for an
+    // esp-hal `Output`), so the `expect`s below can never actually fire.
+
+    // 7a. MFRC522 on the shared bus. CS on GPIO 44 (pins::RFID_CS), started
+    //     high (deasserted). No hardware RST pin — the driver soft-resets over
+    //     SPI in `init()`. No IRQ pin — the `rfid` task polls.
     let rfid_cs = Output::new(peripherals.GPIO44, Level::High, OutputConfig::default());
+    let rfid_device = CriticalSectionDevice::new(spi_bus, rfid_cs, Delay::new())
+        .expect("rfid SPI device (CS error is Infallible)");
 
-    // RST: active-low. Start high to release reset. The `RfidDriver`
-    // owns this `Output` for the rest of the program so the pin stays
-    // high even after `main` returns into the executor.
-    let rfid_rst = Output::new(peripherals.GPIO43, Level::High, OutputConfig::default());
-
-    match RfidDriver::new(rfid_spi, rfid_cs, rfid_rst) {
+    match RfidDriver::new(rfid_device) {
         Ok(driver) => {
             spawner
                 .spawn(rfid_task(driver))
@@ -214,31 +218,13 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    // 8. SPI3 → microSD. 400 kHz first-bring-up clock (SD spec mandates
-    //    ≤ 400 kHz for the init handshake; phase 3 re-clocks via the
-    //    SdCard::spi(|spi| ...) closure once cache throughput matters).
-    let sd_spi = Spi::new(
-        peripherals.SPI3,
-        SpiConfig::default()
-            .with_frequency(Rate::from_hz(SD_INIT_SPI_HZ))
-            .with_mode(SpiMode::_0),
-    )
-    .expect("SPI3 config failed")
-    .with_sck(peripherals.GPIO12)
-    .with_mosi(peripherals.GPIO11)
-    .with_miso(peripherals.GPIO13);
+    // 7b. microSD on the same shared bus. CS on GPIO 43 (pins::SD_CS). No
+    //     card-detect pin — presence is inferred from the init handshake.
+    let sd_cs = Output::new(peripherals.GPIO43, Level::High, OutputConfig::default());
+    let sd_device = CriticalSectionDevice::new(spi_bus, sd_cs, Delay::new())
+        .expect("sd SPI device (CS error is Infallible)");
 
-    let sd_cs = Output::new(peripherals.GPIO10, Level::High, OutputConfig::default());
-
-    // Card-detect is active-low when a card is seated. Enable the
-    // internal pull-up so the line floats high (= "no card") when no
-    // breakout is wired, instead of reading random states.
-    let sd_cd = Input::new(
-        peripherals.GPIO1,
-        InputConfig::default().with_pull(Pull::Up),
-    );
-
-    match SdCardDriver::new(sd_spi, sd_cs, sd_cd) {
+    match SdCardDriver::new(sd_device) {
         Ok(driver) => {
             let driver = SDCARD_CELL.init(driver);
             info!(
@@ -259,6 +245,16 @@ async fn main(spawner: Spawner) {
             log::error!("sd: driver init failed: {err:?}");
         }
     }
+
+    // 8. Main multifunction button on GPIO 1 (pins::BTN_MAIN), RTC-capable so
+    //    it can wake from DEEP_SLEEP. Pull-up: the button shorts to GND when
+    //    pressed. Input handling (short = play/pause, long = pairing, held =
+    //    factory reset) lands with the `input`/`power` tasks in Phase 4; the
+    //    pad is claimed here so it is reserved and documented.
+    let _btn_main = Input::new(
+        peripherals.GPIO1,
+        InputConfig::default().with_pull(Pull::Up),
+    );
 
     // 9. I2S0 → MAX98357A. Circular DMA, 16 KiB TX buffer (~93 ms of
     //    audio at 44.1 kHz × 4 bytes/frame) so the refill cadence in

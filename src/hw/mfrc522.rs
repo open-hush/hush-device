@@ -1,18 +1,20 @@
-//! MFRC522 (RFID reader) bring-up over SPI2.
+//! MFRC522 (RFID reader) bring-up over the shared SPI bus.
 //!
 //! ## Wiring
 //!
-//! - SPI2 bus: SCK [`crate::hw::pins::RFID_SCK`], MOSI
-//!   [`crate::hw::pins::RFID_MOSI`], MISO [`crate::hw::pins::RFID_MISO`].
-//! - Chip select: [`crate::hw::pins::RFID_CS`] (active-low, driven by
-//!   [`embedded_hal_bus::spi::ExclusiveDevice`]).
-//! - Hardware reset: [`crate::hw::pins::RFID_RST`] (active-low). Held
-//!   high during normal operation by retaining the [`esp_hal::gpio::Output`]
-//!   handle inside [`RfidDriver`]; dropping the driver would let the pin
-//!   revert and soft-reset the chip.
-//! - Interrupt: [`crate::hw::pins::RFID_IRQ`] — wired but **not currently
-//!   used**. See the "IRQ deferral" note in `PLAN.md`; the `mfrc522 = 0.7`
-//!   crate does not expose IRQ-register access, so this phase polls.
+//! - Shared SPI bus: SCK [`crate::hw::pins::SPI_SCK`], MOSI
+//!   [`crate::hw::pins::SPI_MOSI`], MISO [`crate::hw::pins::SPI_MISO`] — the
+//!   same bus the microSD hangs off (XIAO has no room for two SPI buses).
+//! - Chip select: [`crate::hw::pins::RFID_CS`] (active-low).
+//! - Hardware reset: **no pin** — no free GPIO in the XIAO's 11-pad budget.
+//!   The driver issues the MFRC522 `SoftReset` command over SPI at init
+//!   instead of toggling a hardware RST line.
+//! - Interrupt: **no pin** — the MFRC522 IRQ line likewise has no free GPIO,
+//!   so this driver polls (see below and `PLAN.md`).
+//!
+//! TODO(hw-reconcile): the CS wrapper below still uses `ExclusiveDevice`,
+//! which owns the whole bus. Once RFID + microSD truly share one bus this
+//! must become a shared-bus `SpiDevice`. Tracked in `PLAN.md`.
 //!
 //! ## Polling instead of IRQ
 //!
@@ -25,19 +27,20 @@
 //! sub-100 ms scan latency — well inside the UX target of "tap and it
 //! plays". Switching to IRQ is tracked as a follow-up in `PLAN.md`.
 
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
-use esp_hal::{Blocking, gpio::Output, spi::master::Spi};
+use embedded_hal_bus::spi::CriticalSectionDevice;
+use esp_hal::{Blocking, delay::Delay, gpio::Output, spi::master::Spi};
 use mfrc522::{
     Initialized, Mfrc522, Uid,
     comm::blocking::spi::{DummyDelay, SpiInterface},
     error::Error as MfrcLibError,
 };
 
-/// Concrete SPI device type: the SPI2 bus plus the dedicated CS pin,
-/// wrapped through `embedded-hal-bus`'s `ExclusiveDevice` (no inter-byte
-/// delay — MFRC522 does not require one) so the `mfrc522` driver can
-/// consume it through the embedded-hal 1.0 `SpiDevice` trait.
-pub type RfidSpiDevice = ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, NoDelay>;
+/// Concrete SPI device type: a per-device handle onto the **shared** SPI bus
+/// (RFID + microSD share one bus on the XIAO), combining the `'static`
+/// critical-section-guarded bus with this reader's dedicated CS pin. The
+/// `mfrc522` driver consumes it through the embedded-hal 1.0 `SpiDevice` trait.
+pub type RfidSpiDevice =
+    CriticalSectionDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>;
 
 /// Concrete `mfrc522::Interface` implementation.
 pub type RfidComm = SpiInterface<RfidSpiDevice, DummyDelay>;
@@ -130,30 +133,23 @@ pub trait RfidReader {
     fn halt(&mut self) -> Result<(), RfidError>;
 }
 
-/// Concrete RFID driver. Holds the initialised MFRC522 chip handle and
-/// keeps the hardware-reset pin alive in its "released" (logic-high)
-/// state so the chip is not held in reset.
+/// Concrete RFID driver. Holds the initialised MFRC522 chip handle. There is
+/// no hardware-reset pin on the XIAO, so the chip is reset purely in software
+/// by `init()` (which issues the MFRC522 `SoftReset` command over SPI).
 pub struct RfidDriver {
     inner: RfidChip,
-    /// Held high for the lifetime of the driver. The `_` prefix keeps
-    /// clippy quiet about a structurally-unused field — its job is to
-    /// own the GPIO so it isn't reverted to input when `Output::drop`
-    /// would otherwise fire.
-    _rst: Output<'static>,
 }
 
 impl RfidDriver {
-    /// Build the driver from the SPI2 bus, the CS pin and the
-    /// already-driven-high RST pin.
-    pub fn new(
-        spi: Spi<'static, Blocking>,
-        cs: Output<'static>,
-        rst: Output<'static>,
-    ) -> Result<Self, RfidError> {
-        let device = ExclusiveDevice::new_no_delay(spi, cs).map_err(|_| RfidError::SpiConfig)?;
+    /// Build the driver from a per-device handle on the shared SPI bus.
+    ///
+    /// `init()` performs the MFRC522 `SoftReset` before configuring the chip,
+    /// which replaces the hardware RST line the XIAO's 11-pad budget can't
+    /// afford.
+    pub fn new(device: RfidSpiDevice) -> Result<Self, RfidError> {
         let interface = SpiInterface::new(device);
         let inner = Mfrc522::new(interface).init()?;
-        Ok(Self { inner, _rst: rst })
+        Ok(Self { inner })
     }
 }
 
